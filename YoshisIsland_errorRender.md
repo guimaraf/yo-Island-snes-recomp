@@ -1,8 +1,12 @@
 # Diagnóstico ER-01 a ER-06 — estado em 15/10/2026
 
+**Timing update:** the latest source protocol uses five seconds of preparation
+followed by two seconds of capture. Older `timed5` details below record prior
+versions; the updated EXE must be built locally before using the new script.
+
 O registro original e as sete imagens foram preservados em `_errorRender.md` e
 `_errorRender/`. Este documento atualiza o estado técnico, sem substituir as
-observações originais. **Todos os seis erros continuam abertos.** A preparação
+observações originais. **ER-06 resolvido no cenário testado; ER-01 a ER-05 abertos.** A preparação
 foi seguida por build e cópia autorizadas pelo usuário, registradas ao final.
 Não houve execução do jogo, nova captura ou validação visual pelo agente.
 
@@ -373,56 +377,56 @@ captura; rearme em runtime, qualidade da coleta e estado de ER-06 continuam
 dependendo do teste local.
 
 
-### ER-06: captura analisada e instrumenta��o de baselines � 15/10/2026
+### ER-06: captura analisada e instrumentação de baselines — 15/10/2026
 
 Captura preservada: `G:\x2\yoshi-render-20261015-093437-81dd767d`.
-S�o 300 frames nativos 256x224, IDs 6522�6821, sem perdas registradas de eventos,
-DMA ou journal, sem linhas inv�lidas nem falhas de I/O. H� uma fronteira V225
-por frame. `capture.done` confirma a exporta��o posterior ao status pendente
+São 300 frames nativos 256x224, IDs 6522–6821, sem perdas registradas de eventos,
+DMA ou journal, sem linhas inválidas nem falhas de I/O. Há uma fronteira V225
+por frame. `capture.done` confirma a exportação posterior ao status pendente
 salvo pelo script. O EXE identificado no manifest tem SHA-256
 `D1DF50F951C346A66D4B03D8340A2D74518AED081F762FB4700069B85E12CF54`.
 
-Fatos: os primeiros 28 frames t�m INIDISP=8F, depois h� brilho 00..0F.
-No trecho 6565�6821, o mapa completo (129 frames �mpares) alterna com o cen�rio
-incompleto (128 frames pares, todos com imagem id�ntica). Em 6601/6602, todas
+Fatos: os primeiros 28 frames têm INIDISP=8F, depois há brilho 00..0F.
+No trecho 6565–6821, o mapa completo (129 frames ímpares) alterna com o cenário
+incompleto (128 frames pares, todos com imagem idêntica). Em 6601/6602, todas
 as linhas diferem apenas nos bytes TM/TS entre os 64 registradores amostrados:
 17/00 no completo e 04/01 no defeituoso. INIDISP=0F nos dois. Os hashes VRAM e
 CGRAM amostrados coincidem nesse par; OAM difere. O GSU continua progredindo.
-N�o h� escritas TM/TS observadas na janela que expliquem essa altern�ncia.
-A imagem defeituosa j� est� no framebuffer nativo; isso n�o exclui problemas
-adicionais de apresenta��o. N�o houve compara��o com Bnes.
+Não há escritas TM/TS observadas na janela que expliquem essa alternância.
+A imagem defeituosa já está no framebuffer nativo; isso não exclui problemas
+adicionais de apresentação. Não houve comparação com Bnes.
 
-Hip�tese a testar: as baselines dos dois campos do journal podem estar herdando
-m�scaras distintas, e o estado ap�s renderEnd pode alimentar a pr�xima baseline.
-A observa��o anterior n�o prova essa origem. N�o corrigir ou fixar TM/TS antes
+Hipótese a testar: as baselines dos dois campos do journal podem estar herdando
+máscaras distintas, e o estado após renderEnd pode alimentar a próxima baseline.
+A observação anterior não prova essa origem. Não corrigir ou fixar TM/TS antes
 de localizar onde o estado diverge.
 
-Prepara��o: API somente de leitura `ppu_rasterProbe` e observador de est�gios
+Preparação: API somente de leitura `ppu_rasterProbe` e observador de estágios
 separado no framework, sem modificar o contrato de PpuDisplayObserver. Sondas
-antes/depois de V225, renderBegin e renderEnd, al�m de cpu_begin/cpu_end.
+antes/depois de V225, renderBegin e renderEnd, além de cpu_begin/cpu_end.
 Capturam clocks e metadados dos dois slots, mais INIDISP/TM/TS/CGADSUB/CGWSEL
-live e nas baselines. Limite 12/frame, perdas expl�citas em
-`raster_probe_summary`, sem aloca��o/I/O por sonda. Imagens/eventos antigos
-permanecem no formato existente. Nenhum payload de mem�ria foi acrescentado.
+live e nas baselines. Limite 12/frame, perdas explícitas em
+`raster_probe_summary`, sem alocação/I/O por sonda. Imagens/eventos antigos
+permanecem no formato existente. Nenhum payload de memória foi acrescentado.
 
 Arquivos: `modules/snesrecomp/runner/src/snes/ppu.c` e `.h`,
 `src/render_capture.h`, `src/game_rtl.c`, `scripts/capture-render.ps1`,
 `tools/flicker-trace.md` e este documento. Diferentemente das etapas anteriores,
-esta instrumenta��o altera a c�pia local do framework; seu pin Git n�o foi
+esta instrumentação altera a cópia local do framework; seu pin Git não foi
 autenticado nesta etapa. O script exige `yi-render-raster-probe-v1` para evitar
 uma coleta sem as sondas. O comando e o prazo de 5 segundos permanecem iguais.
 
-Backups anteriores � build preservados em G:\x2:
+Backups anteriores à build preservados em G:\x2:
 `Yoshi's Island recomp.before-raster-probe-20261015-094531-04437aa0.exe` e
 `scripts/capture-render.before-raster-probe-20261015-094531-04437aa0.ps1`.
-O backup EXE tem o SHA-256 D1DF50...12CF54 acima e tamb�m preserva o EXE anterior
-de build, cujos bytes eram iguais. A captura analisada n�o foi alterada.
+O backup EXE tem o SHA-256 D1DF50...12CF54 acima e também preserva o EXE anterior
+de build, cujos bytes eram iguais. A captura analisada não foi alterada.
 
 
-Build e entrega desta instrumenta��o conclu�das: Release/Ninja, hist�rico
+Build e entrega desta instrumentação concluídas: Release/Ninja, histórico
 PPU/DMA ON, alvo SuperMarioWorld2YoshiSIslandSNESRecomp. O build recompilou
 ppu.c e game_rtl.c e linkou com sucesso; houve aviso de FORCEINLINE redefinido
-entre headers Windows e types.h, sem erro de compila��o.
+entre headers Windows e types.h, sem erro de compilação.
 
 - EXE em build-ninja e `G:\x2\Yoshi's Island recomp.exe`: 13.156.634 bytes,
   SHA-256 `7215E80BF39E0BAD7D2D6F1486568428293E67A968157230971AF4107FA3CBEC`.
@@ -432,67 +436,67 @@ entre headers Windows e types.h, sem erro de compila��o.
   yi-render-repeat-v1 e raster_probe_summary.
 - Parser Windows PowerShell 5.1.26100.9444 e BOM UTF-8 verificados. Hashes de
   origem/destino conferidos para EXE e script; git diff --check passou no port.
-  A inspe��o direta dos hooks confirmou a ordem antes/depois e a aus�ncia de
-  escrita em estado guest na nova consulta. O teto de mem�ria segue verificado
-  pelo receptor e o tamanho exato ser� informado pelo sizeof no TSV da coleta.
+  A inspeção direta dos hooks confirmou a ordem antes/depois e a ausência de
+  escrita em estado guest na nova consulta. O teto de memória segue verificado
+  pelo receptor e o tamanho exato será informado pelo sizeof no TSV da coleta.
 
-Pr�ximo teste: abrir o EXE de nome normal (os nomes maiores s�o backups), rodar
+Próximo teste: abrir o EXE de nome normal (os nomes maiores são backups), rodar
 `.\scripts\capture-render.ps1 -ErrorId ER-06` em G:\x2 e capturar quando o
-seletor piscar. Se poss�vel, obter outra coleta no seletor sem piscadas com
+seletor piscar. Se possível, obter outra coleta no seletor sem piscadas com
 `-Scene 'seletor sem piscadas'`. Preservar cada pasta inteira e informar qual
-cont�m o defeito. A exporta��o pode terminar depois dos 5 segundos do script;
+contém o defeito. A exportação pode terminar depois dos 5 segundos do script;
 aguardar capture.done/capture.failed antes de outra coleta ou de fechar o jogo.
 
 Nenhum jogo foi executado e nenhuma captura nova foi feita pelo agente. A causa
-continua sendo hip�tese: n�o foi aplicada corre��o �s m�scaras ou ao journal,
-e o efeito das sondas/overhead ainda depende do teste de runtime do usu�rio.
+continua sendo hipótese: não foi aplicada correção às máscaras ou ao journal,
+e o efeito das sondas/overhead ainda depende do teste de runtime do usuário.
 
 
-### ER-06: mecanismo observado e corre��o candidata entregue � 15/10/2026
+### ER-06: mecanismo observado e correção candidata entregue — 15/10/2026
 
 Captura analisada e preservada: `G:\x2\yoshi-render-20261015-094907-75410bfb`.
 EXE identificado no manifest: SHA-256
 `7215E80BF39E0BAD7D2D6F1486568428293E67A968157230971AF4107FA3CBEC`.
-S�o 300 frames (6017�6316), 300 imagens v�lidas e oito sondas por frame sem
-perdas de sondas. N�o h� perdas DMA/journal nem falhas de I/O; ocorreram
-11.321 eventos descartados em 6120 (9.260) e 6121 (2.061). Por isso n�o se
+São 300 frames (6017–6316), 300 imagens válidas e oito sondas por frame sem
+perdas de sondas. Não há perdas DMA/journal nem falhas de I/O; ocorreram
+11.321 eventos descartados em 6120 (9.260) e 6121 (2.061). Por isso não se
 considera completo o stream de escritas desses dois frames. As sondas de
 fronteira cobrem todos os 300 frames; os eventos de fronteira desses dois frames
-n�o sobreviveram ao limite compartilhado de eventos. O status pending do
-manifest antecede a exporta��o, confirmada por capture.done.
+não sobreviveram ao limite compartilhado de eventos. O status pending do
+manifest antecede a exportação, confirmada por capture.done.
 
 No frame 6119, sem perdas, o guest escreve TS=00 e TM=17 na linha 224.
 A baseline seguinte captura esses valores. RenderBegin restaura a baseline
 anterior 04/01; o desenho termina sem consumir a cauda na linha 224, e
-RenderEnd mant�m 04/01. O pr�ximo cpu_begin herda esse estado. Nos 150 frames
-6167�6316, sem perdas de eventos nem escritas TM/TS, renderBegin alterna entre
-as duas baselines, e renderEnd mant�m o valor usado no desenho. Os frames
-6315/6316 mostram respectivamente o cen�rio incompleto/completo. Essa cadeia
-localiza uma contamina��o de estado entre reconstru��o visual e simula��o;
-a remo��o do sintoma ainda requer valida��o da corre��o no jogo.
+RenderEnd mantém 04/01. O próximo cpu_begin herda esse estado. Nos 150 frames
+6167–6316, sem perdas de eventos nem escritas TM/TS, renderBegin alterna entre
+as duas baselines, e renderEnd mantém o valor usado no desenho. Os frames
+6315/6316 mostram respectivamente o cenário incompleto/completo. Essa cadeia
+localiza uma contaminação de estado entre reconstrução visual e simulação;
+a remoção do sintoma ainda requer validação da correção no jogo.
 
-Corre��o em `modules/snesrecomp/runner/src/snes/ppu.c`: guardar os 64 bytes
-INIDISP..CGWSEL antes de restaurar a baseline visual e devolv�-los ao guest em
-RenderEnd. Preservar tamb�m scrollPrev, scrollPrev2, m7prev, mosaicStartLine e
-os quatro campos do port OAM j� protegidos anteriormente. O armazenamento
-est�tico total desse snapshot � 72 bytes, sem aloca��o por frame nem dump.
-A restaura��o � por c�pia, sem escritas no barramento; substitui a reaplica��o
-parcial do journal seguinte. N�o fixa TM/TS, n�o remove frames, n�o modifica
-clocks, imagens j� desenhadas, conte�do de mem�ria ou as entradas do journal.
+Correção em `modules/snesrecomp/runner/src/snes/ppu.c`: guardar os 64 bytes
+INIDISP..CGWSEL antes de restaurar a baseline visual e devolvê-los ao guest em
+RenderEnd. Preservar também scrollPrev, scrollPrev2, m7prev, mosaicStartLine e
+os quatro campos do port OAM já protegidos anteriormente. O armazenamento
+estático total desse snapshot é 72 bytes, sem alocação por frame nem dump.
+A restauração é por cópia, sem escritas no barramento; substitui a reaplicação
+parcial do journal seguinte. Não fixa TM/TS, não remove frames, não modifica
+clocks, imagens já desenhadas, conteúdo de memória ou as entradas do journal.
 A telemetria de sondas permanece ativa.
 
-Tamb�m foram atualizados o contrato local em
+Também foram atualizados o contrato local em
 `modules/snesrecomp/docs/FRAME_MODEL_HOSTS.md`, este documento e o teste
 `modules/snesrecomp/tests/ppu/ppu_raster_journal_test.c`.
-O novo caso sem ROM reproduz escritas na linha 224, restaura��o completa dos
+O novo caso sem ROM reproduz escritas na linha 224, restauração completa dos
 registradores/latches e dois campos seguintes sem novas escritas TM/TS.
-Falhou no c�digo anterior em memcmp do estado guest e passou ap�s a mudan�a.
-Os casos anteriores do mesmo teste (splits, escritas ap�s V225, OAM e reset)
-tamb�m passaram. O teste foi compilado/executado isoladamente em pasta tempor�ria,
+Falhou no código anterior em memcmp do estado guest e passou após a mudança.
+Os casos anteriores do mesmo teste (splits, escritas após V225, OAM e reset)
+também passaram. O teste foi compilado/executado isoladamente em pasta temporária,
 sem iniciar o jogo. O compilador desse teste emitiu avisos nos trechos existentes
-sobre signedness, par�nteses, vari�vel n�o usada e fallthrough; n�o houve erro.
+sobre signedness, parênteses, variável não usada e fallthrough; não houve erro.
 
-Build Release/Ninja conclu�da: recompila��o de ppu.c e link do alvo
+Build Release/Ninja concluída: recompilação de ppu.c e link do alvo
 SuperMarioWorld2YoshiSIslandSNESRecomp, mantendo PPU/DMA history ON.
 O EXE anterior de build e teste foi preservado antes da build (bytes iguais):
 `G:\x2\Yoshi's Island recomp.before-er06-fix-20261015-095645-2d88101a.exe`,
@@ -501,19 +505,170 @@ SHA-256 `7215E80BF39E0BAD7D2D6F1486568428293E67A968157230971AF4107FA3CBEC`.
 Novo EXE em `build-ninja/Yoshi's Island recomp.exe` e
 `G:\x2\Yoshi's Island recomp.exe`: 13.156.635 bytes, hashes iguais:
 `E8C4ABA393A42E315F3A09CB9BE176525061328F273C86986F212D769BBF6EE8`.
-Marcadores das sondas, captura de 5 segundos e rearme verificados. O script n�o
-foi alterado: origem e c�pia de teste mant�m SHA-256
+Marcadores das sondas, captura de 5 segundos e rearme verificados. O script não
+foi alterado: origem e cópia de teste mantêm SHA-256
 `18A1C621EEA3686D352AE8D5230668BC072C335284AE95AC1E44B117F2EF7340`.
-N�o foram copiados ROM ou dumps nem alteradas capturas anteriores.
+Não foram copiados ROM ou dumps nem alteradas capturas anteriores.
 
 Teste local pendente: abrir o EXE de nome normal, concluir fases, retornar ao
 seletor e repetir o ciclo que disparava as piscadas. Capturar com o mesmo comando
 `.\scripts\capture-render.ps1 -ErrorId ER-06`, inclusive um resultado sem
 piscadas, e informar a pasta. Esperado nas sondas: os registradores live de
-stage=6 devem retornar aos valores de stage=3 do mesmo frame, sem for�ar as
-baselines a valores constantes. Conferir tamb�m intro, gameplay e pause como
-controles da altera��o geral de preserva��o do estado PPU. A observa��o visual
-positiva isolada ainda n�o certifica todos os cen�rios.
+stage=6 devem retornar aos valores de stage=3 do mesmo frame, sem forçar as
+baselines a valores constantes. Conferir também intro, gameplay e pause como
+controles da alteração geral de preservação do estado PPU. A observação visual
+positiva isolada ainda não certifica todos os cenários.
 
-Estado: ER-06 com corre��o candidata entregue, pendente de runtime; ER-01 a
-ER-05 continuam abertos. Nenhuma execu��o do jogo ou captura nova pelo agente.
+Estado: ER-06 com correção candidata entregue, pendente de runtime; ER-01 a
+ER-05 continuam abertos. Nenhuma execução do jogo ou captura nova pelo agente.
+
+### ER-06 validado e ER-05 priorizado — 15/10/2026
+
+A correção está versionada no commit `493f08b` (`fix stage select flicker`),
+conferido antes desta edição com árvore limpa no port. `_errorRender.md` agora
+registra sintoma, mecanismo, correção e validação do ER-06. A captura preservada
+`G:\x2\yoshi-render-20261015-095903-0001eecf` identifica o EXE corrigido
+`E8C4ABA393A42E315F3A09CB9BE176525061328F273C86986F212D769BBF6EE8`.
+O usuário repetiu o gatilho sem piscadas. Nos 300 frames, os cinco registradores
+das sondas retornam ao estado pré-desenho; nos 213 frames finais o seletor fica
+estável, TM/TS=17/00, sem alternância ou quadros pretos. São 300 imagens válidas,
+sem perdas de sondas, DMA ou journal nem falhas de I/O. Houve 11.319 eventos
+descartados em dois frames da transição, separados do gatilho e trecho estável.
+Esta validação é restrita ao fluxo testado, sem declarar ER-01 a ER-05 resolvidos.
+
+O usuário priorizou ER-05 e relatou deslocamento horizontal indevido da caixa
+de texto da abertura. O aparecimento prematuro antigo também permanece no
+roteiro, mas precisa ser reavaliado após ER-06. Não atribuir os dois sintomas
+automaticamente à mesma causa. Nenhuma referência equivalente de Bnes disponível.
+
+Preparação atual nos fontes, sem build/cópia de EXE ou nova captura: `src/render_capture.h`
+ganhou modo opt-in `yi-render-box-v1`, solicitado pela terceira linha do pedido:
+`box x y largura altura`. O script ativa esse modo apenas em ER-05, com região
+inicial 0,0,256,112 em pixels nativos e `-BoxRegion` para ajuste. A região deve
+estar dentro de 800x224; cada linha registra a largura efetiva recortada à imagem.
+Nenhum valor de coordenada foi inferido das imagens ampliadas como posição exata
+da caixa. O default é uma faixa de observação, não uma detecção do objeto.
+
+`box_row` guarda validade, x/largura efetivos, hash RGB FNV-1a, contagem e extremos
+dos pixels não pretos, soma das coordenadas x (centroide = sum_x/nonblack),
+posição/comprimento do maior trecho não preto de cor exata uniforme e seu hash
+de cor, e posição/comprimento do maior trecho preto. Empates escolhem o trecho
+mais à esquerda; comprimento zero significa ausência, não posição x=0 válida.
+Os extremos sem pixels não pretos usam sentinela 800. `valid=0` indica linha
+inválida ou região sem interseção. Scroll BG1..BG4, W1/W2, brilho e TM/TS têm
+nomes legíveis; os demais estados de janela e color math continuam no regs64.
+Isso não são limites calculados pelo compositor nem rastreamento automático.
+Comparar várias linhas e confirmar o bloco nas imagens para evitar confundir
+fundo, letras ou expansão com translação horizontal.
+
+Para reduzir a pressão de milhares de eventos de conteúdo já redigido, somente
+no modo box os ports 2104/2118/2119/2122 são agregados em `box_bulk_writes` por
+frame, port, origem e fase. Origem 4 agrupa valores desconhecidos. Não preserva
+timestamp individual de cada byte; não é descarte silencioso. Eventos de controle
+e fronteiras mantêm a ordem/timestamps e o limite de 8192, com `event_lost`.
+Os metadados DMA/HDMA e jobs/sondas GSU existentes continuam separados.
+
+Limites: até 224 `RcBoxRow` por frame, quatro ports × cinco origens × duas fases
+de contadores, 360 frames temporizados e teto de memória de 512 MiB preservado.
+`sizeof(RcBoxRow)` e total do ring saem no cabeçalho. Não há alocação nem I/O
+por linha/evento; a medida percorre apenas o RGB da região já copiado para o
+frame. O custo real adicional de CPU ainda precisa ser medido no teste local.
+As imagens continuam nativas; não há exportação de VRAM/OAM/CGRAM/WRAM/SRAM/ROM.
+
+Arquivos alterados nesta etapa: `_errorRender.md`, este documento,
+`src/render_capture.h`, `scripts/capture-render.ps1` e `tools/flicker-trace.md`.
+Links das imagens no registro principal foram corrigidos para `_errorRender/`;
+nenhuma imagem foi movida ou alterada. Os dois documentos técnicos com trechos
+de codificação mista foram normalizados para UTF-8 para preservar os acentos.
+Não foram alterados o framework nem a correção de ER-06. O script mantém UTF-8
+com BOM para Windows PowerShell 5.1, pedidos em UTF-8 sem BOM e duração de 5 s.
+
+Próximo teste depende de build com os fontes atuais. A cópia de teste ainda não
+tem box-v1; o script exige esse marcador em ER-05 antes de criar qualquer pasta.
+Não foram atualizados os arquivos de G:\x2 nesta etapa. Ver instruções atuais
+em `tools/flicker-trace.md`; preservar resultados e identificar caixa/mensagem,
+fase da abertura, movimento observado, inputs e mudanças de foco em notes.txt.
+
+Verificações desta etapa: parser do Windows PowerShell 5.1.26100.9444 sem erros;
+validação isolada de defaults ER-05/ER-06, região personalizada e seis regiões
+inválidas (coordenadas negativas, limites, dimensão zero, quantidade e overflow).
+Esse teste executou só o prefixo de parâmetros, sem descobrir processo, criar
+coleta ou iniciar jogo. BOM do script e UTF-8 dos documentos conferidos; revisão
+dos limites dos loops, índices, clipping e contadores; git diff --check passou.
+O receptor também evita consultar trigger sem um pedido inicializado ao rearmar
+o ring retido entre coletas. Sem compilação do C ou teste de runtime nesta etapa.
+
+## ER-05 — ampliação para objetos do cenário e novas sondas de fase
+
+O usuário relata que a bola empurrável também desliza com a câmera antes do
+contato. A coleta `G:\x2\yoshi-render-20261015-105833-0c2f6d70` contém 299
+frames (8691–8989), sem perdas de eventos, DMA, journal ou sondas, sem linhas
+inválidas e sem falhas de exportação. O campo Scene conserva o default antigo
+da abertura; as imagens mostram gameplay. Não reclassificar a cena pelo texto
+automático do manifest.
+
+Um trecho idêntico de 14×14 pixels da bola foi acompanhado em 80 frames.
+Somar a posição ao scroll BG1 do próprio frame produz até três pixels de
+variação horizontal; usar o scroll do frame seguinte produz a mesma posição
+nos 80 casos, inclusive verticalmente. Um detalhe idêntico do chão confirma
+deslizamento relativo de um pixel nos frames 8755–8757. A hipótese principal
+é mistura de objetos e câmera de campos diferentes. Isso ainda não comprova
+o estado físico do guest, ausência de contato ou a causa da caixa de texto.
+Não existe sequência Bnes equivalente identificada para comparação.
+
+Instrumentação ampliada em `src/render_capture.h`, sem modificar o framework:
+
+- `motion_probe`: scroll BG1–BG4, hashes de OAM baixa/alta e CGRAM e contador
+  OAM por fase, junto às sondas existentes. O serial conta notificações da
+  fronteira desde a instalação do observer, não campos guest independentes.
+- `obj_phase`/`obj_slot`: geometria e assinatura de até 128 slots em duas fases
+  (antes da fronteira e depois do renderBegin). Não são bytes de OAM nem IDs
+  de tiles; slots não representam identidade persistente de objetos.
+- Coordenadas SNES anteriores aos ajustes widescreen/HUD e tamanho nominal
+  quadrado do renderer. Não representam visibilidade, clipping ou física.
+- O script exige `yi-render-motion-v1`; o default da região passa a 256×224.
+  Scene deixa de presumir abertura e notes solicita objeto, câmera e contatos.
+- Tetos mantidos: 360 frames, 512 MiB, 12 sondas/frame com perdas registradas,
+  duas fases × 128 slots. Sem alocação/I/O por registro; hashes adicionais
+  percorrem 1.056 bytes por sonda. Custo real precisa do teste local.
+
+Arquivos desta etapa: `src/render_capture.h`, `scripts/capture-render.ps1`,
+`_errorRender.md`, este documento e `tools/flicker-trace.md`. O último contém
+os comandos e controles sugeridos. Esta extensão é passiva; não há tentativa
+de corrigir ER-05 ou compensar movimento. `obj_summary` registra tentativas
+repetidas além das duas fases; fases ausentes são inválidas explicitamente.
+
+Build Release concluída com sucesso pelo alvo
+`SuperMarioWorld2YoshiSIslandSNESRecomp`, em `build-ninja`, mantendo
+`SNESRECOMP_ENABLE_PPU_DMA_HISTORY=ON`. EXE e script copiados para `G:\x2`;
+hashes de origem/destino iguais e os cinco marcadores de captura presentes.
+
+- EXE: `224D61FD4AEE5A4D0748E7B8EC34B23F936D9570279EC535E0EAB74A2DD2ABFE`.
+- Script: `98A754207080EB9F8B7F1A3824D269DA76535D4B87D34A0921DE074A5827B815`.
+- Backups: `G:\x2\Yoshi's Island recomp.before-er05-motion-20261015-111151.exe`
+  e `G:\x2\scripts\capture-render.before-er05-motion-20261015-111151.ps1`.
+
+Parser PowerShell passou e o BOM UTF-8 do script foi preservado. Nenhuma
+captura anterior foi alterada. Sem novo runtime executado pelo agente; conteúdo
+das novas sondas, custo e reprodução dos controles dependem do teste local.
+
+## ER-05 — janela de captura reduzida
+
+O script agora agenda o início cinco segundos depois do Enter e o fim dois
+segundos após o início. Mantém apenas os frames completos dentro dessa janela:
+aproximadamente 120 por teste a 60 Hz, cerca de 480 em quatro casos. O script
+mostra a contagem regressiva de preparação e termina depois dos sete segundos
+totais; a exportação pode continuar até `capture.done` ou `capture.failed`.
+
+O protocolo grava timestamps separados de início e fim. O receptor converte
+ambos uma vez para o relógio monotônico e só publica slots durante a captura;
+os cinco segundos de preparação não entram no ring. O cabeçalho TSV v3 separa
+o frame em que o pedido foi notado, primeiro e último frames completos e os
+dois prazos. Zero frames completos continua sendo falha.
+
+Arquivos alterados: `scripts/capture-render.ps1`, `src/render_capture.h`,
+`tools/flicker-trace.md`, `_errorRender.md` e este documento. **Nenhuma build foi
+feita nesta etapa**, de acordo com a instrução atual do repositório para builds
+locais. O EXE e o script em `G:\x2` continuam com a versão anterior até o
+build/cópia local. O novo script exige `yi-render-timed-window-v2` e recusará
+um EXE antigo antes de criar a pasta, evitando coleta com duração incorreta.

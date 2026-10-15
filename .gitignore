@@ -2,6 +2,7 @@
 /src/gen/
 /recomp/funcs.h
 /_errorRender/
+/emulators/
 
 newPrompt.txt
 

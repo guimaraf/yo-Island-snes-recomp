@@ -1,8 +1,8 @@
 # Coleta delimitada das piscadas
 
-## Jogo já aberto: 5 segundos após Enter
+## Jogo já aberto: 5 segundos de preparação + 2 segundos de captura
 
-Depois do **seu build local atualizado com `yi-render-timed-v1`**, abra o jogo
+Depois do **seu build local atualizado com `yi-render-timed-window-v2`**, abra o jogo
 normalmente. Copie `scripts/capture-render.ps1` para `G:\x2\scripts\`, abra
 PowerShell em `G:\x2` e execute:
 
@@ -15,25 +15,26 @@ inclusive ao repetir no mesmo processo. Depois que a exportação anterior fecha
 o port reutiliza o ring alocado e aceita a próxima coleta. As pastas anteriores
 não são sobrescritas.
 
-O script prepara a pasta, solicita a ativação e espera Enter no console. Volte
-ao jogo e chegue à cena desejada. Ao pressionar Enter no console, começa uma
-janela fixa de **5 segundos de relógio**, com contagem regressiva. Volte ao jogo
-imediatamente. O script salva seu manifest e encerra ao fim da janela, sem esperar
-indefinidamente pelo jogo/disco. Não inicia outra instância, não encerra o jogo,
-não pausa e não envia Enter ao guest.
+O script prepara a pasta, arma o receptor e espera Enter no console. Deixe a
+cena pronta para avançar. Depois de pressionar Enter, há **5 segundos de
+preparação**, seguidos por **2 segundos efetivos de captura**. Durante a
+preparação, volte ao jogo e deixe a cena avançar; o instante de início e o fim
+são enviados ao receptor como prazos separados. O script encerra sozinho após
+os sete segundos totais. Não inicia outra instância, não encerra o jogo, não
+pausa e não envia Enter ao guest.
 
-O jogo retém apenas frames completos obtidos após Enter e antes do prazo; não há
-histórico anterior neste modo. Uma thread independente encerra a janela mesmo
-se o guest parar de avançar e exporta os frames já publicados. O limite é de
-360 frames e 512 MiB de pré-alocação (tamanho real em stderr/TSV). A 60 Hz são
-esperados aproximadamente 300 frames se o jogo avançar durante toda a janela.
-Pausa por perda de foco reduz o material; uma captura de 5 s não garante registrar
-o defeito. Não use turbo/frameskip, rewind, save/load, run-ahead ou netplay.
+O jogo retém apenas frames completos obtidos na janela programada, sem histórico
+anterior. Uma thread independente encerra a janela mesmo se o guest parar de
+avançar e exporta os frames já publicados. O limite é de 360 frames e 512 MiB
+de pré-alocação (tamanho real em stderr/TSV). A 60 Hz são esperados
+aproximadamente 120 frames por teste. Com quatro testes, o total esperado é
+aproximadamente 480 frames. Pausa por perda de foco reduz o material. Não use
+turbo/frameskip, rewind, save/load, run-ahead ou netplay.
 
 A exportação pode terminar **depois** de o script encerrar. Aguarde `capture.done`
 ou `capture.failed` antes de fechar o jogo. O script registra o estado observado
-aos 5 s, não promete fechamento do disco nesse prazo. Encerrar o processo do
-jogo pode interromper a gravação. A memória do lote temporizado é mantida e
+ao fim dos sete segundos, não promete fechamento do disco nesse prazo. Encerrar
+o processo do jogo pode interromper a gravação. A memória do lote temporizado é mantida e
 reutilizada pelo mesmo processo para não liberar um slot que o produtor ainda
 possa estar usando. Rode o script novamente após o fechamento da exportação para
 uma nova pasta. Reset fecha antecipadamente o lote parcial.
@@ -51,22 +52,24 @@ opcionais. Se houver mais de um processo/nome diferente, informe o PID real:
 
 O receptor é identificado no EXE em disco **antes de criar a pasta**; uma versão
 antiga que só aceitava uma coleta por processo não é aceita para repetição no
-mesmo PID. São exigidos `yi-render-timed-v1` e `yi-render-repeat-v1`. Não substitua o EXE
+mesmo PID. São exigidos `yi-render-timed-window-v2` e `yi-render-repeat-v1`. Não substitua o EXE
 enquanto ele estiver aberto, pois o hash em disco não autentica a imagem carregada.
 As opções anteriores `-WaitForExport` e `-TimeoutSeconds` foram removidas deste
-script: a duração agora é sempre 5 segundos após Enter.
+script: a versão anterior capturava 5 segundos após Enter; esta versão prepara
+por 5 segundos e captura durante os 2 segundos seguintes.
 
 O pedido `yi-capture-request-PID.txt` fica ao lado do EXE, sem substituir arquivos
 existentes (pasta gravável necessária). Ao consumir o pedido, o jogo o remove para
-permitir outro teste no mesmo PID. Sua segunda linha é `timed5`. O `trigger`
-contém o prazo UTC em milissegundos Unix, publicado por rename. O receptor converte
-o tempo restante para seu contador monotônico; não prolonga a captura para
-compensar ativação tardia. Se só receber o pedido depois do prazo, exporta uma
-coleta sem frames, marcada como falha. Sem resposta do jogo, o script preserva
-metadados e encerra com estado de ausência de confirmação.
+permitir outro teste no mesmo PID. Sua segunda linha é `timed2prep5`. O `trigger`
+contém os instantes UTC de início e fim em milissegundos Unix, publicado por
+rename. O receptor converte os prazos para seu contador monotônico ao consumir
+o trigger. Se o início já tiver passado, a captura começa imediatamente e
+continua até o fim agendado. Sem confirmação do jogo, o script preserva
+metadados e registra a ausência de confirmação.
 
-`capture.tsv` v2 identifica contadores, intervalo de cada frame no clock host,
-frequência desse clock, prazo UTC, frames retidos e descartes por limite. Os
+`capture.tsv` v3 identifica o frame em que o pedido foi notado, primeiro e
+último frames retidos, início/fim UTC, contador monotônico e descartes por
+limite. Os
 slots são publicados por atomics antes de a thread exportadora lê-los; o frame
 incompleto no prazo é excluído. Limites por frame continuam 8192 eventos PPU e
 512 DMA, com contadores próprios. Zero frames não é sucesso. `capture.done`
@@ -231,26 +234,172 @@ instrumentação.
 
 ## ER-06: sondas de TM/TS do raster journal
 
-A build de investiga��o exige tamb�m `yi-render-raster-probe-v1`. Use o mesmo
+A build de investigação exige também `yi-render-raster-probe-v1`. Use o mesmo
 comando `scripts/capture-render.ps1 -ErrorId ER-06`; a janela continua sendo
-5 segundos ap�s Enter, sem hist�rico anterior e com pasta �nica por execu��o.
-Primeiro capture o seletor est�vel, se dispon�vel, com `-Scene 'seletor antes de
-concluir fase; sem piscadas'`. Depois capture a ocorr�ncia com `-Scene 'seletor
+5 segundos após Enter, sem histórico anterior e com pasta única por execução.
+Primeiro capture o seletor estável, se disponível, com `-Scene 'seletor antes de
+concluir fase; sem piscadas'`. Depois capture a ocorrência com `-Scene 'seletor
 apos concluir fase; com piscadas; anotar fase'`. Preencha `notes.txt` com a fase,
-inputs e foco. Aguarde o marcador final antes da pr�xima coleta.
+inputs e foco. Aguarde o marcador final antes da próxima coleta.
 
 `raster_probe` no TSV exporta apenas metadados: stage, clocks CPU/beam, V/H,
-slot em grava��o, flags armed/have_completed/rendering, cursor e contagem/perdas
-de cada slot. `live`, `slot0` e `slot1` t�m cinco bytes de registradores na ordem
-INIDISP, TM, TS, CGADSUB, CGWSEL. O slot conclu�do � current^1 somente quando
-have_completed=1; cursor s� deve ser interpretado no contexto do est�gio.
-Est�gios: 1/2 antes/depois da fronteira, 3/4 antes/depois de renderBegin,
-5/6 antes/depois de renderEnd, 7 in�cio CPU e 8 fim CPU. Estado por linha e
-escritas continuam nos registros existentes. N�o h� snapshot de mem�ria guest.
+slot em gravação, flags armed/have_completed/rendering, cursor e contagem/perdas
+de cada slot. `live`, `slot0` e `slot1` têm cinco bytes de registradores na ordem
+INIDISP, TM, TS, CGADSUB, CGWSEL. O slot concluído é current^1 somente quando
+have_completed=1; cursor só deve ser interpretado no contexto do estágio.
+Estágios: 1/2 antes/depois da fronteira, 3/4 antes/depois de renderBegin,
+5/6 antes/depois de renderEnd, 7 início CPU e 8 fim CPU. Estado por linha e
+escritas continuam nos registros existentes. Não há snapshot de memória guest.
 
-Limite: 12 sondas/frame, sem aloca��o nem I/O por sonda; excedentes constam em
+Limite: 12 sondas/frame, sem alocação nem I/O por sonda; excedentes constam em
 `raster_probe_summary lost`. O teto total de 512 MiB continua verificado em
-runtime. Os hooks leem o estado, sem mudar as m�scaras nem a ordem do replay.
-A nova API do framework e o port precisam ser compilados juntos. A build n�o
-valida a hip�tese; a compara��o das pr�ximas capturas determinar� onde TM/TS
-mudam ou s�o herdados.
+runtime. Os hooks leem o estado, sem mudar as máscaras nem a ordem do replay.
+A nova API do framework e o port precisam ser compilados juntos. A build não
+valida a hipótese; a comparação das próximas capturas determinará onde TM/TS
+mudam ou são herdados.
+
+## ER-05 — medição inicial da caixa e região padrão atualizada
+
+O primeiro probe da caixa foi compilado e copiado em outubro de 2026. A extensão
+de movimento mais recente acrescentou os slots e sondas descritos abaixo; a
+mudança de janela 5+2 segundos exige recompilar localmente e também esses novos
+marcadores no EXE antes de usar o script atualizado. Rode em `G:\x2`:
+
+```powershell
+.\scripts\capture-render.ps1 -ErrorId ER-05
+```
+
+O script exige `yi-render-box-v1` e `yi-render-motion-v1` no EXE antes de criar
+uma pasta. A nova janela requer também `yi-render-timed-window-v2`; o EXE já
+copiado para `G:\x2` ainda tem o protocolo de 5 segundos e será recusado. ER-06
+permanece independente da janela de diagnóstico; não há mudança na correção.
+
+Região padrão atual: x=0, y=0, largura=256, altura=224, na imagem **nativa**,
+sem escala. Ela inclui a altura inteira da bola e do cenário; não identifica
+sozinha os limites de um objeto. Para restringir a região após observar uma
+imagem nativa, por exemplo:
+
+```powershell
+.\scripts\capture-render.ps1 -ErrorId ER-05 -BoxRegion 32,8,192,104 -Scene 'intro; caixa aberta; movimento horizontal'
+```
+
+Essas coordenadas são ilustrativas, não uma localização validada. A região
+deve caber em 800x224; o receptor recorta horizontalmente à largura real e
+registra a interseção por linha. Regiões fora da largura real não têm medida
+válida. Não use coordenadas da janela ampliada ou das capturas antigas escaladas.
+
+Arme o pedido com o jogo aberto e aguarde `capture.armed`. Deixe a ação pronta,
+pressione Enter e use os cinco segundos de preparação para voltar ao jogo. A
+captura inicia ao fim da contagem e dura dois segundos; execute/mantenha a ação
+durante essa janela. Para incluir a abertura da caixa, deixe o jogo pronto para
+iniciá-la quando a captura começar. Para o movimento contínuo, capture a caixa
+aberta. Não há histórico anterior. O script encerra em sete segundos; a
+exportação pode continuar, então aguarde `capture.done`/`capture.failed` antes
+de repetir ou sair.
+Cada execução cria pasta nova ao lado do EXE, sem mexer nas anteriores.
+
+Preencha notes.txt com a mensagem/caixa observada, se estava abrindo ou aberta,
+direção do movimento, inputs e foco. Faça outro teste com caixa do gameplay ou
+pause como controle, identificando a cena em -Scene. Preserve session.json,
+capture.tsv, imagens native-*.ppm e todos os marcadores. Não acrescente dumps.
+
+Dados novos no TSV:
+
+- `box_row`: ROI válida e efetiva por linha, hash RGB, contagem/extremos dos pixels
+  não pretos, soma de x, maior trecho não preto de cor uniforme e seu hash de cor,
+  maior trecho preto, scroll BG1..BG4, W1/W2, INIDISP e TM/TS. Para cada trecho,
+  extremos inclusivos são x..x+len-1 quando len>0; empates ficam à esquerda.
+  `sum_x/nonblack` é centroide dos pixels não pretos, **não** o centro da caixa.
+  `first=last=800` indica ausência de pixels não pretos. `valid=0` impede usar
+  as medidas; len=0 significa trecho ausente. Consulte regs64 para máscaras,
+  lógica das janelas e color math completos.
+- `box_bulk_writes`: contagem das escritas de conteúdo (2104, 2118, 2119, 2122)
+  por port/origem/fase nesse frame. Só o modo box agrega esses eventos para
+  reservar o journal de captura às escritas de controle. Não contém conteúdo
+  nem horário individual por byte; origem 4 significa desconhecida. Metadados
+  DMA e eventos de controle continuam no formato anterior, com limites/perdas.
+
+Os trechos uniformes podem pertencer ao fundo ou ao texto; confirme o objeto nas
+imagens antes de chamar a variação de deslocamento. Scroll variando com janela
+fixa sugere um caminho diferente de limites da janela variando com conteúdo
+fixo, mas isso ainda não determina causa. Expansão altera largura e centroide
+sem necessariamente mover a caixa. A apresentação GPU permanece fora da coleta.
+
+Há até 224 medidas por frame, sem alocação/I/O por medida. A região é percorrida
+no RGB já retido; o cabeçalho registra sizeof e o ring mantém teto de 512 MiB.
+O custo de CPU da extensão ainda não foi medido em runtime. Nenhum payload de
+memória guest é exportado. O modo legado de tools/render-capture.ps1 não ativa
+essas medidas; os exemplos acima usam o script de attach atualizado.
+
+## ER-05 — objetos parados e câmera: sondas de movimento
+
+**Timing update:** after Enter, the current protocol waits five seconds, then
+captures for two seconds. Each capture therefore contains about 120 complete
+frames at 60 Hz; four controlled captures should total about 480 frames. The
+script still runs for seven seconds and the writer may finish exporting after
+it exits. The executable must contain `yi-render-timed-window-v2`; this change
+requires the user to build and copy the updated executable and script locally.
+
+Esta extensão substitui o padrão de região da etapa anterior: o ER-05 usa
+`0,0,256,224`, ajustável por `-BoxRegion`. O script exige os marcadores
+`yi-render-box-v1` e `yi-render-motion-v1`. Cada acionamento continua gerando
+uma pasta exclusiva ao lado do EXE, `G:\x2\yoshi-render-<data-hora>-<id>`,
+com cinco segundos após Enter, sem histórico anterior. O jogo deve estar aberto
+usando o EXE atualizado; fechar uma instância anterior antes de testar a nova.
+
+Faça coletas separadas, preservando a pasta inteira de cada uma:
+
+1. Bola sem contato: mantenha distância suficiente para não empurrá-la e mova
+   a câmera para os dois lados. Se possível, inclua uma mudança de direção.
+2. Câmera parada: mantenha bola e chão visíveis por cinco segundos, sem contato.
+3. Contato intencional: empurre a bola para distinguir movimento legítimo do
+   deslizamento associado à câmera. Não misture esse caso com o primeiro.
+4. Caixa: capture a abertura desde antes do primeiro aparecimento. Em outra
+   coleta, capture a caixa aberta durante o deslocamento observado.
+
+Exemplos no PowerShell em `G:\x2`:
+
+```powershell
+.\scripts\capture-render.ps1 -ErrorId ER-05 -Scene 'bola; sem contato; camera esquerda-direita'
+.\scripts\capture-render.ps1 -ErrorId ER-05 -Scene 'bola; camera parada; sem contato'
+.\scripts\capture-render.ps1 -ErrorId ER-05 -Scene 'bola; empurrao intencional'
+.\scripts\capture-render.ps1 -ErrorId ER-05 -Scene 'caixa; abertura completa'
+```
+
+Execute um comando por vez. Deixe a pasta armar, pressione Enter no console e
+volte ao jogo durante os cinco segundos. O script não envia Enter ao guest.
+Espere `capture.done` ou `capture.failed` antes de repetir ou fechar o jogo;
+o script termina ao fim da janela, mas a exportação pode terminar depois.
+Anote em `notes.txt` a fase, o objeto/mensagem, os inputs, contatos e mudanças
+de foco. Informe o nome da pasta com o problema e, se possível, uma de controle.
+
+Novos registros em `capture.tsv`:
+
+- `motion_probe`: frame e stage correspondem a `raster_probe`; contém scroll
+  BG1–BG4, hashes separados de OAM baixa/alta e CGRAM, contador de escritas
+  OAM e serial de notificações da fronteira. Stage 2 incrementa esse serial;
+  ele não substitui um identificador independente de campo guest.
+- `obj_phase`: confirma presença e quantidade dos dois snapshots fixos.
+  Fase 0/stage 1 é anterior à fronteira; fase 1/stage 4 é posterior ao
+  renderBegin e anterior à primeira transferência HDMA do desenho.
+- `obj_summary`: conta tentativas repetidas que excedem as duas fases fixas;
+  fases ausentes são marcadas com `valid=0`. Perdas por teto de sondas continuam
+  em `raster_probe_summary`.
+- `obj_slot`: até 128 slots por fase, com x assinado SNES, y de oito bits,
+  tamanho nominal e assinatura FNV-1a dos atributos/tamanho, sem coordenadas
+  nessa assinatura. Não exporta atributos, tile IDs ou bytes de memória.
+
+Os slots podem ser reutilizados; vários slots podem formar uma bola ou caixa.
+As coordenadas precedem clipping e ajustes widescreen/HUD; o tamanho segue o
+modelo quadrado atual do renderer, sem representar interlace ou todos os modos
+retangulares do hardware. Esses dados não identificam visibilidade, física ou
+objetos automaticamente. Correlacionar com imagens, hashes e metadados DMA.
+Alterações dentro de uma linha não são reconstruídas pelos dois snapshots.
+
+O teto continua em 360 frames e 512 MiB, com até 12 sondas de fase e duas
+geometrias de 128 slots por frame. Hashes adicionais leem 1.056 bytes por sonda
+(512 OAM baixa + 32 alta + 512 CGRAM); as geometrias são extraídas duas vezes
+por frame. Não há alocação nem I/O por slot/sonda. A região RGB completa passa
+a ser medida, aumentando trabalho em relação à metade superior anterior.
+O custo real e os dados exportados precisam ser conferidos no teste local.
+Esta é uma build de diagnóstico, sem correção ou compensação de movimento.

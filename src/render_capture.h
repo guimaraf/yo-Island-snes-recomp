@@ -28,29 +28,56 @@ static FILE *rc_fopen(const char *path, const char *mode) {
 
 #define RC_FRAMES 25u
 #define RC_TIMED_FRAMES 360u
+#define RC_TIMED_PREP_MS 5000u
+#define RC_TIMED_CAPTURE_MS 2000u
 #define RC_EVENTS 8192u
 #define RC_WIDTH 800u
 typedef struct {
     uint64_t cpu, beam;
     unsigned v, h, line, phase, source, reg, value, boundary;
 } RcEvent;
+/* Image-derived metadata, not object detection or guest memory contents. */
+typedef struct {
+    unsigned valid, x, width, hash, nonblack, first, last, sum_x;
+    unsigned flat_x, flat_len, flat_color_hash, black_x, black_len;
+} RcBoxRow;
 typedef struct {
     unsigned valid, pitch, width, hash, nonblack, journal, dropped, cursor, completed;
     uint64_t cpu, beam, gsu_clock, instructions;
     unsigned v, h, sfr, irq;
     uint8_t regs[PPU_SAVESTATE_REGS_SIZE];
     DmaChannel channels[8]; /* exported as metadata only */
+    RcBoxRow box;
 } RcLine;
 #define RC_PROBES 12u
 typedef struct {
     unsigned stage, v, h;
     uint64_t cpu, beam;
+    uint64_t boundary_serial;
+    uint16_t hscroll[4], vscroll[4];
+    uint32_t oam_low_hash, oam_high_hash, cgram_hash, oam_writes;
     PpuRasterProbe state;
 } RcProbe;
+/* Decoded geometry and a content signature only; never export OAM bytes.
+ * A slot can be reused and does not identify a game object. Coordinates are
+ * native SNES coordinates, before widescreen/HUD adjustments and clipping. */
+typedef struct {
+    int16_t x;
+    uint8_t y, size;
+    uint32_t signature;
+} RcObjSlot;
+typedef struct {
+    unsigned valid, stage;
+    uint64_t boundary_serial;
+    RcObjSlot slot[128];
+} RcObjPhase;
 typedef struct {
     unsigned probes, probe_lost;
     RcProbe probe[RC_PROBES];
+    RcObjPhase obj[2]; /* boundary_before and render_begin_after */
+    unsigned obj_lost;
     unsigned id, events, lost, invalid_rows, dma_lost, dma_count, jobs;
+    unsigned box_bulk[4][5][2]; /* port, source (4=unknown), CPU/draw */
     RcEvent event[RC_EVENTS];
     RcLine line[224];
     uint8_t rgb[224 * RC_WIDTH * 3];
@@ -64,12 +91,16 @@ static RcFrame *rc_ring, *rc_current;
 static unsigned rc_initialized, rc_mark, rc_schedule, rc_done, rc_resets, rc_armed_frame;
 static const char *rc_dir;
 static char rc_attached_dir[1024];
-static unsigned rc_timed, rc_capacity = RC_FRAMES, rc_timed_used;
+static unsigned rc_timed, rc_timed_prep_ms, rc_capacity = RC_FRAMES, rc_timed_used;
 static SDL_atomic_t rc_timed_stop, rc_timed_completed, rc_timed_reset;
 static SDL_atomic_t rc_timed_writer_done;
 static uint64_t rc_deadline_counter;
+static uint64_t rc_capture_start_counter;
+static uint64_t rc_capture_start_utc_ms;
 static uint64_t rc_requested_deadline_utc;
 static SDL_atomic_t rc_frame_cap_drops;
+static unsigned rc_box_enabled, rc_box_x, rc_box_y, rc_box_w, rc_box_h;
+static uint64_t rc_boundary_serial; /* observer notifications, not guest state */
 static int SDLCALL rc_timed_writer(void *unused);
 static uint64_t rc_utc_ms(void) {
 #ifdef _WIN32
@@ -98,7 +129,17 @@ static const char *rc_attach_request(void) {
     if (!request) return NULL;
     if (!fgets(rc_attached_dir, sizeof(rc_attached_dir), request)) rc_attached_dir[0] = 0;
     { char mode[32];
-      if (fgets(mode, sizeof(mode), request) && !strncmp(mode, "timed5\n", 7)) rc_timed=1; }
+      if (fgets(mode, sizeof(mode), request)) {
+          if(!strncmp(mode,"timed2prep5\n",12)) {rc_timed=1;rc_timed_prep_ms=RC_TIMED_PREP_MS;}
+          else if(!strncmp(mode,"timed5\n",7)) {rc_timed=1;rc_timed_prep_ms=0;}
+      } }
+    rc_box_enabled=rc_box_x=rc_box_y=rc_box_w=rc_box_h=0;
+    { char roi[96]; unsigned x,y,w,h;
+      if (fgets(roi,sizeof(roi),request) &&
+          sscanf(roi,"box %u %u %u %u",&x,&y,&w,&h)==4 &&
+          x<RC_WIDTH && y<224 && w>0 && w<=RC_WIDTH-x && h>0 && h<=224-y) {
+          rc_box_enabled=1; rc_box_x=x; rc_box_y=y; rc_box_w=w; rc_box_h=h;
+      } }
     fclose(request);
     rc_attached_dir[strcspn(rc_attached_dir, "\r\n")] = 0;
     /* Consume the single per-process rendezvous so this same game can be
@@ -138,18 +179,64 @@ static void rc_memory(unsigned phase) {
     }
 }
 
+static uint32_t rc_hash_bytes(const void *data, size_t bytes) {
+    const uint8_t *p=(const uint8_t *)data;
+    uint32_t hash=2166136261u;
+    size_t i;
+    for(i=0;i<bytes;i++) hash=(hash^p[i])*16777619u;
+    return hash;
+}
+static void rc_obj_phase(unsigned stage) {
+    static const uint8_t sizes[8][2]={{8,16},{8,32},{8,64},{16,32},
+                                    {16,64},{32,64},{16,32},{16,32}};
+    RcObjPhase *out=&rc_current->obj[stage==4];
+    unsigned slot;
+    if(out->valid) { rc_current->obj_lost++; return; }
+    out->valid=1; out->stage=stage; out->boundary_serial=rc_boundary_serial;
+    for(slot=0;slot<128;slot++) {
+        unsigned high=(g_ppu->highOam[slot>>2]>>((slot&3)*2))&3;
+        unsigned x=(g_ppu->oam[slot*2]&255)|((high&1)<<8);
+        uint16_t attr=g_ppu->oam[slot*2+1];
+        uint8_t signature[3]={(uint8_t)attr,(uint8_t)(attr>>8),sizes[(g_ppu->obsel>>5)&7][high>>1]};
+        RcObjSlot *s=&out->slot[slot];
+        s->x=(int16_t)(x>=256?(int)x-512:(int)x);
+        s->y=(uint8_t)(g_ppu->oam[slot*2]>>8);
+        s->size=sizes[(g_ppu->obsel>>5)&7][high>>1];
+        s->signature=rc_hash_bytes(signature,sizeof(signature));
+    }
+}
 static void rc_probe(unsigned stage) {
     RcProbe *p;
+    if(stage==2) rc_boundary_serial++;
     if (!rc_current) return;
     if (rc_current->probes == RC_PROBES) { rc_current->probe_lost++; return; }
     p=&rc_current->probe[rc_current->probes++];
     p->stage=stage; p->cpu=g_cpu.master_cycles; p->beam=g_snes->beamMasterLast;
     p->v=g_snes->vPos; p->h=g_snes->hPos;
     ppu_rasterProbe(g_ppu, &p->state);
+    if(rc_box_enabled) {
+        p->boundary_serial=rc_boundary_serial;
+        memcpy(p->hscroll,g_ppu->hScroll,sizeof(p->hscroll));
+        memcpy(p->vscroll,g_ppu->vScroll,sizeof(p->vscroll));
+        p->oam_low_hash=rc_hash_bytes(g_ppu->oam,sizeof(g_ppu->oam));
+        p->oam_high_hash=rc_hash_bytes(g_ppu->highOam,sizeof(g_ppu->highOam));
+        p->cgram_hash=rc_hash_bytes(g_ppu->cgram,sizeof(g_ppu->cgram));
+        p->oam_writes=g_ppu->oamWriteCount;
+        if(stage==1 || stage==4) rc_obj_phase(stage);
+    }
 }
 static void rc_event(int boundary, uint16_t reg, uint8_t value) {
     RcEvent *e;
     if (!rc_current) return;
+    /* ER-05 needs control-register timing, not thousands of redacted bytes.
+     * Keep bulk-port counts by origin/phase; DMA metadata remains separate. */
+    if(rc_box_enabled && !boundary &&
+       (reg==0x2104 || reg==0x2118 || reg==0x2119 || reg==0x2122)) {
+        unsigned port=reg==0x2104?0:reg==0x2118?1:reg==0x2119?2:3;
+        unsigned source=g_ppu_wlog_src<4?g_ppu_wlog_src:4;
+        rc_current->box_bulk[port][source][!strcmp(trace_phase,"draw")]++;
+        return;
+    }
     if (rc_current->events == RC_EVENTS) { rc_current->lost++; return; }
     e = &rc_current->event[rc_current->events++];
     e->cpu = g_cpu.master_cycles; e->beam = g_snes->beamMasterLast;
@@ -168,7 +255,8 @@ static void rc_begin(void) {
         rc_timed_used=0; rc_armed_frame=0; SDL_AtomicSet(&rc_frame_cap_drops,0);
         SDL_AtomicSet(&rc_timed_completed,0); SDL_AtomicSet(&rc_timed_stop,0);
         SDL_AtomicSet(&rc_timed_reset,0); SDL_AtomicSet(&rc_timed_writer_done,0);
-        rc_requested_deadline_utc=0; rc_deadline_counter=0;
+        rc_requested_deadline_utc=0; rc_capture_start_utc_ms=0;
+        rc_capture_start_counter=0; rc_deadline_counter=0;
         rc_status("capture.rearmed", "yi-render-repeat-v1\n");
         /* Do not clear hundreds of MiB: each published slot is initialized
          * before use and the new manifest bounds the exported frame IDs. */
@@ -196,11 +284,11 @@ static void rc_begin(void) {
             rc_schedule = rc_dir == rc_attached_dir ? 0 : trace_number("YI_CAPTURE_AT", 0);
             ppu_set_display_observer(trace_observe);
             ppu_set_raster_probe_observer(rc_probe);
-            rc_status("capture.armed", rc_timed ? "yi-render-timed-v1 seconds=5 frame_cap=360 pre=0\n" : "yi-render-attach-v1 pre=8 post=16 batch_cap=1\n");
+            rc_status("capture.armed", rc_timed ? (rc_timed_prep_ms ? "yi-render-timed-window-v2 preparation_seconds=5 capture_seconds=2 frame_cap=360 pre=0\n" : "yi-render-timed-v1 seconds=5 frame_cap=360 pre=0\n") : "yi-render-attach-v1 pre=8 post=16 batch_cap=1\n");
             fprintf(stderr, "YI capture: armed, %zu bytes, one batch\n", sizeof(RcFrame)*rc_capacity);
         }
     }
-    if (!rc_ring || rc_done) return;
+    if (!rc_initialized || !rc_ring || rc_done) return;
     if (!rc_mark) {
         char path[1024]; FILE *signal;
         int n = snprintf(path, sizeof(path), "%s/trigger", rc_dir);
@@ -208,18 +296,33 @@ static void rc_begin(void) {
         if (signal || (rc_schedule && trace_frame >= rc_schedule)) {
             rc_mark = trace_frame;
             if (rc_timed) {
-                unsigned long long requested_deadline=0;
-                uint64_t now=rc_utc_ms(), remaining;
+                unsigned long long requested_start=0, requested_deadline=0;
+                uint64_t now=rc_utc_ms(), remaining, deadline_remaining, counter_now;
                 SDL_Thread *timer;
-                if (!signal || fscanf(signal,"%llu",&requested_deadline)!=1) {
+                if (!signal || (rc_timed_prep_ms
+                    ? fscanf(signal,"%llu%llu",&requested_start,&requested_deadline)!=2
+                    : fscanf(signal,"%llu",&requested_deadline)!=1)) {
                     if(signal) fclose(signal);
                     rc_status("capture.failed","Invalid timed trigger\n"); rc_done=1;
                     SDL_AtomicSet(&rc_timed_writer_done,1); return;
                 }
-                remaining=requested_deadline>now?requested_deadline-now:0;
+                if(rc_timed_prep_ms &&
+                   (requested_deadline<requested_start ||
+                    requested_deadline-requested_start!=RC_TIMED_CAPTURE_MS ||
+                    requested_start>now+(uint64_t)rc_timed_prep_ms+1000u)) {
+                    fclose(signal); rc_status("capture.failed","Invalid timed window\n"); rc_done=1;
+                    SDL_AtomicSet(&rc_timed_writer_done,1); return;
+                }
+                rc_capture_start_utc_ms=rc_timed_prep_ms?requested_start:now;
+                remaining=rc_timed_prep_ms?(requested_start>now?requested_start-now:0):0;
+                deadline_remaining=requested_deadline>now?requested_deadline-now:0;
                 rc_requested_deadline_utc=requested_deadline;
-                if(remaining>5000) remaining=5000;
-                rc_deadline_counter=SDL_GetPerformanceCounter()+remaining*SDL_GetPerformanceFrequency()/1000u;
+                if(remaining>RC_TIMED_PREP_MS+1000u) remaining=RC_TIMED_PREP_MS+1000u;
+                if(deadline_remaining>RC_TIMED_PREP_MS+RC_TIMED_CAPTURE_MS+1000u)
+                    deadline_remaining=RC_TIMED_PREP_MS+RC_TIMED_CAPTURE_MS+1000u;
+                counter_now=SDL_GetPerformanceCounter();
+                rc_capture_start_counter=counter_now+remaining*SDL_GetPerformanceFrequency()/1000u;
+                rc_deadline_counter=counter_now+deadline_remaining*SDL_GetPerformanceFrequency()/1000u;
                 timer=SDL_CreateThread(rc_timed_writer,"yi-capture-timed",NULL);
                 if(timer) SDL_DetachThread(timer);
                 else { rc_status("capture.failed","Timer/writer thread failed\n"); rc_done=1;
@@ -231,6 +334,7 @@ static void rc_begin(void) {
     if(rc_done) return;
     if(rc_timed) {
         if(!rc_mark || SDL_AtomicGet(&rc_timed_stop)) return;
+        if(SDL_GetPerformanceCounter()<rc_capture_start_counter) return;
         if(SDL_GetPerformanceCounter()>=rc_deadline_counter) return;
         if(rc_timed_used==rc_capacity) { SDL_AtomicSet(&rc_frame_cap_drops,SDL_AtomicGet(&rc_frame_cap_drops)+1); return; }
         rc_current=&rc_ring[rc_timed_used];
@@ -242,6 +346,32 @@ static void rc_begin(void) {
     rc_current->dma_begin = ppudma_dma_count();
     rc_memory(0);
     rc_probe(7); /* cpu begin */
+}
+static void rc_box_measure(RcBoxRow *b, const uint8_t *rgb, unsigned width) {
+    unsigned x, end, run_x, run_len=0, run_color=0;
+    b->x=rc_box_x;
+    if (b->x>=width) return;
+    b->width=rc_box_w < width-b->x ? rc_box_w : width-b->x;
+    b->valid=1; b->hash=2166136261u;
+    b->first=b->last=RC_WIDTH; /* sentinel when no nonblack pixel */
+    end=b->x+b->width; run_x=b->x;
+    for(x=b->x;x<end;x++) {
+        const uint8_t *p=rgb+x*3;
+        unsigned color=((unsigned)p[0]<<16)|((unsigned)p[1]<<8)|p[2], c;
+        for(c=0;c<3;c++) b->hash=(b->hash^p[c])*16777619u;
+        if(color) {
+            if(!b->nonblack) b->first=x;
+            b->last=x; b->nonblack++; b->sum_x+=x;
+        }
+        if(!run_len || color!=run_color) {run_x=x;run_len=0;run_color=color;}
+        run_len++;
+        if(!color && run_len>b->black_len) {b->black_x=run_x;b->black_len=run_len;}
+        if(color && run_len>b->flat_len) {
+            b->flat_x=run_x;b->flat_len=run_len;
+            b->flat_color_hash=2166136261u;
+            for(c=0;c<3;c++) b->flat_color_hash=(b->flat_color_hash^p[c])*16777619u;
+        }
+    }
 }
 static void rc_row(const Ppu *p, unsigned line) {
     unsigned x, c, width = 256u + 2u*p->extraLeftRight;
@@ -269,6 +399,8 @@ static void rc_row(const Ppu *p, unsigned line) {
         /* Native framebuffer is little-endian ARGB (B,G,R,X). */
         for (c = 0; c < 3; c++) rc_current->rgb[((line-1)*RC_WIDTH+x)*3+c] = pixel[2-c];
     }
+    if(rc_box_enabled && line-1>=rc_box_y && line-1-rc_box_y<rc_box_h)
+        rc_box_measure(&r->box,rc_current->rgb+(line-1)*RC_WIDTH*3,width);
 }
 static FILE *rc_open(const char *name) {
     char path[1024];
@@ -281,18 +413,20 @@ static int SDLCALL rc_flush(void *unused) {
     unsigned last = rc_export.last;
     RcFrame *ring = rc_export.ring;
     (void)unused;
-    unsigned first = rc_timed ? rc_mark : (rc_mark > 8 ? rc_mark-8 : 1), id, y, i, failures = 0, slot;
+    unsigned first = rc_timed ? (rc_export.count?ring[0].id:0) : (rc_mark > 8 ? rc_mark-8 : 1), id, y, i, failures = 0, slot;
     unsigned retained=rc_timed?rc_export.count:(last>=first?last-first+1:0);
     FILE *f = rc_open("capture.tsv");
     if (!f) { perror("YI capture.tsv"); rc_status("capture.failed", "Cannot create capture.tsv\n"); if(!rc_timed) free(ring); return 1; }
-    fprintf(f, "# yi-render-v2 mark=%u first=%u last=%u pre=%u post=%s bytes=%zu event_cap=%u batch_cap=1 resets=%u frame_cap=%u\n",
-        rc_mark, first, last, rc_timed?0:8, rc_timed?"5seconds":"16frames", sizeof(RcFrame)*rc_capacity, RC_EVENTS, rc_resets,rc_capacity);
-    if(rc_timed) fprintf(f,"# timed completed=%u frame_cap_drops=%u deadline_utc_ms=%llu host_counter_frequency=%llu end=%s incomplete_current_frame=excluded\n",rc_export.count,(unsigned)SDL_AtomicGet(&rc_frame_cap_drops),(unsigned long long)rc_requested_deadline_utc,(unsigned long long)SDL_GetPerformanceFrequency(),rc_export.reset?"reset_partial":"monotonic_deadline");
+    fprintf(f, "# yi-render-v3 request_mark=%u first=%u last=%u pre=%u post=%s preparation=%s bytes=%zu event_cap=%u batch_cap=1 resets=%u frame_cap=%u\n",
+        rc_mark, first, last, rc_timed?0:8, rc_timed?"2seconds":"16frames", rc_timed?"5seconds":"none", sizeof(RcFrame)*rc_capacity, RC_EVENTS, rc_resets,rc_capacity);
+    if(rc_timed) fprintf(f,"# timed completed=%u frame_cap_drops=%u capture_start_utc_ms=%llu capture_end_utc_ms=%llu start_counter=%llu end_counter=%llu host_counter_frequency=%llu end=%s incomplete_current_frame=excluded\n",rc_export.count,(unsigned)SDL_AtomicGet(&rc_frame_cap_drops),(unsigned long long)rc_capture_start_utc_ms,(unsigned long long)rc_requested_deadline_utc,(unsigned long long)rc_capture_start_counter,(unsigned long long)rc_deadline_counter,(unsigned long long)SDL_GetPerformanceFrequency(),rc_export.reset?"reset_partial":"monotonic_deadline");
     fputs("# yi-render-raster-probe-v1 cap=12 states=INIDISP,TM,TS,CGADSUB,CGWSEL stages=1:boundary_before,2:boundary_after,3:render_begin_before,4:render_begin_after,5:render_end_before,6:render_end_after,7:cpu_begin,8:cpu_end physical_slots=0,1 recording=current completed=current^1_when_have_completed\n", f);
     fputs("# counters=port-call; field=V225-journal-not-independent-ID; presentation=unavailable; beam during draw is parked; line=after-runLine-before-HDMA; clocks=master\n", f);
     fputs("# event: frame cpu beam V H drawLine phase(0cpu/1draw) source boundary reg value(256=redacted)\n", f);
     fputs("# row: frame y valid width pitch cpu beam V H hashBGR nonblack journal dropped cursor completed gsuClock instructions SFR IRQ regs64\n", f);
     fputs("# regs64 layout=local Ppu.inidisp..cgwsel; offsets follow\n", f);
+    fprintf(f,"# yi-render-box-v1 enabled=%u requested_roi=%u,%u,%u,%u max_rows=224 per_row_bytes=%zu coords=native_zero_based first_last_empty=800 run_tie=leftmost hash=FNV1a_RGB color_hash=FNV1a_RGB3 bulk_ports=counts_by_source_phase_when_enabled heuristic_not_object_tracking\n",rc_box_enabled,rc_box_x,rc_box_y,rc_box_w,rc_box_h,sizeof(RcBoxRow));
+    fprintf(f,"# yi-render-motion-v1 enabled=%u probe_cap=%u obj_phases=2 slots_per_phase=128 obj_bytes_per_frame=%zu signature=FNV1a_attr_and_size_no_coordinates hashes=FNV1a_raw_internal_bytes_no_payload boundary_serial=observer_stage2_notifications coords=SNES_signed_x_unsigned_y_before_widescreen size=square_renderer_model not_visibility_or_object_identity\n",rc_box_enabled,RC_PROBES,sizeof(ring[0].obj));
 #define RC_OFFSET(member) fprintf(f, "# reg %s offset=%zu bytes=%zu\n", #member, offsetof(Ppu, member)-offsetof(Ppu,inidisp), sizeof(g_ppu->member))
     RC_OFFSET(inidisp); RC_OFFSET(obsel); RC_OFFSET(bgmode); RC_OFFSET(mosaic);
     RC_OFFSET(bgXsc); RC_OFFSET(bgTileAdr); RC_OFFSET(m7sel); RC_OFFSET(setini);
@@ -307,6 +441,13 @@ static int SDLCALL rc_flush(void *unused) {
         b=rc_timed?&ring[slot]:&ring[(id-1)%RC_FRAMES];
         if (b->id != id) { fprintf(f,"missing\t%u\n",id); continue; }
         fprintf(f,"frame\t%u\tevent_lost=%u\tinvalid_rows=%u\tdma_lost=%u\tjobs_recent=%u\n",id,b->lost,b->invalid_rows,b->dma_lost,b->jobs);
+        if(rc_box_enabled) {
+            static const unsigned ports[4]={0x2104,0x2118,0x2119,0x2122};
+            unsigned port,source,phase;
+            for(port=0;port<4;port++) for(source=0;source<5;source++) for(phase=0;phase<2;phase++)
+                if(b->box_bulk[port][source][phase])
+                    fprintf(f,"box_bulk_writes\t%u\treg=%04X\tsource=%u\tphase=%u\tcount=%u\n",id,ports[port],source,phase,b->box_bulk[port][source][phase]);
+        }
         fprintf(f,"raster_probe_summary\t%u\tcount=%u\tlost=%u\n",id,b->probes,b->probe_lost);
         for(i=0;i<b->probes;i++) {
             RcProbe *p=&b->probe[i]; PpuRasterProbe *q=&p->state; unsigned k;
@@ -314,6 +455,24 @@ static int SDLCALL rc_flush(void *unused) {
             for(k=0;k<5;k++) fprintf(f,"%02X",q->live[k]);
             for(k=0;k<2;k++) fprintf(f,"\tslot%u=%02X%02X%02X%02X%02X,count=%u,dropped=%u",k,q->base[k][0],q->base[k][1],q->base[k][2],q->base[k][3],q->base[k][4],q->count[k],q->dropped[k]);
             fputc('\n',f);
+            if(rc_box_enabled) {
+                fprintf(f,"motion_probe\t%u\tstage=%u\tboundary_serial=%llu\toam_low_hash=%08X\toam_high_hash=%08X\tcgram_hash=%08X\toam_writes=%u",id,p->stage,(unsigned long long)p->boundary_serial,p->oam_low_hash,p->oam_high_hash,p->cgram_hash,p->oam_writes);
+                for(k=0;k<4;k++) fprintf(f,"\tBG%u_h=%u\tBG%u_v=%u",k+1,(unsigned)p->hscroll[k],k+1,(unsigned)p->vscroll[k]);
+                fputc('\n',f);
+            }
+        }
+        if(rc_box_enabled) {
+            unsigned phase,k;
+            fprintf(f,"obj_summary\t%u\tlost=%u\n",id,b->obj_lost);
+            for(phase=0;phase<2;phase++) {
+                RcObjPhase *q=&b->obj[phase];
+                fprintf(f,"obj_phase\t%u\tphase=%u\tvalid=%u\tstage=%u\tboundary_serial=%llu\tslots=%u\n",id,phase,q->valid,q->stage,(unsigned long long)q->boundary_serial,q->valid?128:0);
+                if(!q->valid) continue;
+                for(k=0;k<128;k++) {
+                    RcObjSlot *s=&q->slot[k];
+                    fprintf(f,"obj_slot\t%u\tphase=%u\tslot=%u\tx=%d\ty=%u\tsize=%u\tsignature=%08X\n",id,phase,k,(int)s->x,(unsigned)s->y,(unsigned)s->size,s->signature);
+                }
+            }
         }
         fprintf(f,"host_interval\t%u\t%llu\t%llu\n",id,(unsigned long long)b->host_begin,(unsigned long long)b->host_end);
         for(y=0;y<2;y++) for(i=0;i<18;i++)
@@ -326,6 +485,20 @@ static int SDLCALL rc_flush(void *unused) {
                 (unsigned long long)r->cpu,(unsigned long long)r->beam,r->v,r->h,r->hash,r->nonblack,r->journal,r->dropped,r->cursor,r->completed,
                 (unsigned long long)r->gsu_clock,(unsigned long long)r->instructions,r->sfr,r->irq);
             for(i=0;i<sizeof(r->regs);i++) fprintf(f,"%02X",r->regs[i]); fputc('\n',f);
+            if(rc_box_enabled && y>=rc_box_y && y-rc_box_y<rc_box_h) {
+                RcBoxRow *q=&r->box;
+                const uint8_t *s=r->regs;
+#define RC_REG_OFF(member) (offsetof(Ppu,member)-offsetof(Ppu,inidisp))
+                unsigned hs=RC_REG_OFF(hScroll), vs=RC_REG_OFF(vScroll), wi=RC_REG_OFF(window1left);
+                fprintf(f,"box_row\t%u\ty=%u\tvalid=%u\tx=%u\twidth=%u\thashRGB=%08X\tnonblack=%u\tfirst=%u\tlast=%u\tsum_x=%u\tflat_x=%u\tflat_len=%u\tflat_color_hash=%08X\tblack_x=%u\tblack_len=%u",id,y,q->valid,q->x,q->width,q->hash,q->nonblack,q->first,q->last,q->sum_x,q->flat_x,q->flat_len,q->flat_color_hash,q->black_x,q->black_len);
+                for(i=0;i<4;i++) {
+                    uint16_t h,v;
+                    memcpy(&h,s+hs+i*2,sizeof(h));memcpy(&v,s+vs+i*2,sizeof(v));
+                    fprintf(f,"\tBG%u_h=%u\tBG%u_v=%u",i+1,(unsigned)h,i+1,(unsigned)v);
+                }
+                fprintf(f,"\tW1=%u,%u\tW2=%u,%u\tINIDISP=%02X\tTM=%02X\tTS=%02X\n",s[wi],s[wi+1],s[wi+2],s[wi+3],s[0],s[RC_REG_OFF(screenEnabled)],s[RC_REG_OFF(screenEnabled)+1]);
+#undef RC_REG_OFF
+            }
             for(i=0;i<8;i++) { DmaChannel *d=&r->channels[i];
                 fprintf(f,"hdma_sample\t%u\t%u\t%u\t%u\t%u\t%04X\t%u\t%u\t%u\t%02X\t%u\t%04X\n",id,y,i,d->hdmaActive,d->terminated,d->tableAdr,d->repCount,d->doTransfer,d->indirect,d->bAdr,d->mode,d->size); }
         }
