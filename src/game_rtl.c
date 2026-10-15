@@ -26,6 +26,7 @@ static unsigned trace_frame, trace_start, trace_end, trace_events, trace_lost;
 static int trace_initialized, trace_line = -1;
 static const char *trace_phase = "cpu";
 static void trace_state(const char *kind, int row);
+static void trace_observe(int event, uint16_t reg, uint8_t val);
 
 static unsigned trace_number(const char *name, unsigned fallback) {
     const char *s = getenv(name);
@@ -38,6 +39,7 @@ static unsigned trace_number(const char *name, unsigned fallback) {
 static int trace_active(void) {
     return trace_file && trace_frame >= trace_start && trace_frame <= trace_end;
 }
+#include "render_capture.h"
 static void trace_prefix(const char *kind) {
     fprintf(trace_file, "%s\t%u\t%s\t%d\t%llu\t%llu\t%u\t%u\t%lld\t",
         kind, trace_frame, trace_phase, trace_line,
@@ -46,6 +48,7 @@ static void trace_prefix(const char *kind) {
         g_snes->vPos, g_snes->hPos, (long long)clock());
 }
 static void trace_observe(int event, uint16_t reg, uint8_t val) {
+    rc_event(event, reg, val);
     if (!trace_active()) return;
     if (trace_events++ >= 16384) { trace_lost++; return; }
     if (event) trace_state("boundary_state", -1);
@@ -120,6 +123,7 @@ static void trace_begin(void) {
     ++trace_frame;
     trace_events = trace_lost = 0;
     trace_phase = "cpu"; trace_line = -1;
+    rc_begin();
     trace_state("begin", -1);
 }
 
@@ -136,6 +140,7 @@ static void trace_drawn_line(const Ppu *ppu, unsigned line, void *context)
     (void)ppu;
     (void)context;
     trace_line = (int)line;
+    rc_row(ppu, line);
     trace_state("drawn", -1);
     trace_state("row", (int)line - 1);
     /* The following HDMA/replay writes prepare the next visible line. */
@@ -144,15 +149,17 @@ static void trace_drawn_line(const Ppu *ppu, unsigned line, void *context)
 
 void GameDrawPpuFrame(void)
 {
+    rc_probe(8);
     trace_state("cpu_end", -1);
     trace_phase = "draw";
     trace_line = 0;
     snes_beam_frame_driver_draw_ppu_frame_observed(
-        trace_active() ? trace_drawn_line : NULL, NULL);
+        (trace_active() || rc_current) ? trace_drawn_line : NULL, NULL);
     trace_state("draw_end", -1);
+    rc_end();
     if (trace_active()) fflush(trace_file);
     if (trace_file && trace_frame >= trace_end) {
-        ppu_set_display_observer(NULL);
+        if (!rc_ring) ppu_set_display_observer(NULL);
         fclose(trace_file);
         trace_file = NULL;
     }
@@ -168,6 +175,17 @@ const RtlGameInfo kGameInfo = {
 
 void GameSessionReset(void)
 {
+    if (rc_ring) {
+        fputs("YI capture: aborted by session reset; restart process for a new capture\n", stderr);
+        if(rc_timed) {
+            /* Timer owns completed slots; reset must not free them. */
+            rc_done=1; rc_current=NULL;
+            SDL_AtomicSet(&rc_timed_reset,1);
+            SDL_AtomicSet(&rc_timed_stop,1);
+        } else {
+            free(rc_ring); rc_ring = NULL; rc_current = NULL; rc_done = 1; rc_resets++;
+        }
+    }
     snes_beam_frame_driver_reset();
     ppu_rasterReset();
 }

@@ -1,5 +1,141 @@
 # Coleta delimitada das piscadas
 
+## Jogo já aberto: 5 segundos após Enter
+
+Depois do **seu build local atualizado com `yi-render-timed-v1`**, abra o jogo
+normalmente. Copie `scripts/capture-render.ps1` para `G:\x2\scripts\`, abra
+PowerShell em `G:\x2` e execute:
+
+```powershell
+.\scripts\capture-render.ps1 -ErrorId ER-06
+```
+
+Cada execução do script cria uma pasta nova com data/hora e um identificador,
+inclusive ao repetir no mesmo processo. Depois que a exportação anterior fecha,
+o port reutiliza o ring alocado e aceita a próxima coleta. As pastas anteriores
+não são sobrescritas.
+
+O script prepara a pasta, solicita a ativação e espera Enter no console. Volte
+ao jogo e chegue à cena desejada. Ao pressionar Enter no console, começa uma
+janela fixa de **5 segundos de relógio**, com contagem regressiva. Volte ao jogo
+imediatamente. O script salva seu manifest e encerra ao fim da janela, sem esperar
+indefinidamente pelo jogo/disco. Não inicia outra instância, não encerra o jogo,
+não pausa e não envia Enter ao guest.
+
+O jogo retém apenas frames completos obtidos após Enter e antes do prazo; não há
+histórico anterior neste modo. Uma thread independente encerra a janela mesmo
+se o guest parar de avançar e exporta os frames já publicados. O limite é de
+360 frames e 512 MiB de pré-alocação (tamanho real em stderr/TSV). A 60 Hz são
+esperados aproximadamente 300 frames se o jogo avançar durante toda a janela.
+Pausa por perda de foco reduz o material; uma captura de 5 s não garante registrar
+o defeito. Não use turbo/frameskip, rewind, save/load, run-ahead ou netplay.
+
+A exportação pode terminar **depois** de o script encerrar. Aguarde `capture.done`
+ou `capture.failed` antes de fechar o jogo. O script registra o estado observado
+aos 5 s, não promete fechamento do disco nesse prazo. Encerrar o processo do
+jogo pode interromper a gravação. A memória do lote temporizado é mantida e
+reutilizada pelo mesmo processo para não liberar um slot que o produtor ainda
+possa estar usando. Rode o script novamente após o fechamento da exportação para
+uma nova pasta. Reset fecha antecipadamente o lote parcial.
+
+As pastas ficam ao lado do EXE aberto, por exemplo
+`G:\x2\yoshi-render-DATA-HORA-IDUNICO\`. Use `-OutputRoot` para outro destino,
+inclusive acentuado. Preserve `session.json`, `notes.txt`, `capture.tsv`, todos
+os `native-*.ppm` e marcadores. Não inclua ROM ou dumps de memória guest.
+O script é portátil e não depende da pasta de build; hashes de fontes são
+opcionais. Se houver mais de um processo/nome diferente, informe o PID real:
+
+```powershell
+.\scripts\capture-render.ps1 -GameProcessId 1234 -ErrorId ER-03 -Scene 'titulo'
+```
+
+O receptor é identificado no EXE em disco **antes de criar a pasta**; uma versão
+antiga que só aceitava uma coleta por processo não é aceita para repetição no
+mesmo PID. São exigidos `yi-render-timed-v1` e `yi-render-repeat-v1`. Não substitua o EXE
+enquanto ele estiver aberto, pois o hash em disco não autentica a imagem carregada.
+As opções anteriores `-WaitForExport` e `-TimeoutSeconds` foram removidas deste
+script: a duração agora é sempre 5 segundos após Enter.
+
+O pedido `yi-capture-request-PID.txt` fica ao lado do EXE, sem substituir arquivos
+existentes (pasta gravável necessária). Ao consumir o pedido, o jogo o remove para
+permitir outro teste no mesmo PID. Sua segunda linha é `timed5`. O `trigger`
+contém o prazo UTC em milissegundos Unix, publicado por rename. O receptor converte
+o tempo restante para seu contador monotônico; não prolonga a captura para
+compensar ativação tardia. Se só receber o pedido depois do prazo, exporta uma
+coleta sem frames, marcada como falha. Sem resposta do jogo, o script preserva
+metadados e encerra com estado de ausência de confirmação.
+
+`capture.tsv` v2 identifica contadores, intervalo de cada frame no clock host,
+frequência desse clock, prazo UTC, frames retidos e descartes por limite. Os
+slots são publicados por atomics antes de a thread exportadora lê-los; o frame
+incompleto no prazo é excluído. Limites por frame continuam 8192 eventos PPU e
+512 DMA, com contadores próprios. Zero frames não é sucesso. `capture.done`
+confirma arquivos fechados, não ausência de perdas ou defeitos. Não se observa
+o framebuffer final GPU; relógios guest e conteúdo PPU não são modificados.
+
+O `.ps1` usa UTF-8 **com BOM** (Windows PowerShell 5.1), enquanto o protocolo de
+caminhos usa UTF-8 **sem BOM**, convertido para Unicode no receptor Windows.
+Preserve a codificação ao copiar. Caso o processo aberto já use trace legado,
+seu custo de I/O continuará presente.
+
+## Captura circular ER-01 a ER-05 (nova, experimental)
+
+Implementada nos fontes, **ainda sem build ou teste de runtime**. Depois do seu
+build local, use o executável resultante. O EXE antigo em G:\x2 não recebe a
+instrumentação por ter o mesmo nome. Não sobrescreva sua referência antiga.
+
+Exemplo manual, em PowerShell (ajuste o caminho do EXE recém-compilado):
+
+```powershell
+& "F:\GitRevised\SnesRecompProject\Single Player\Yoshi's Island recomp\tools\render-capture.ps1" -Exe "G:\x2\yoshi-instrumentado.exe" -ErrorId ER-03 -Scene 'titulo; anotar inputs'
+```
+
+O script inicia o jogo somente quando você o executar. Na cena, volte ao console
+e pressione Enter. Essa tecla pertence ao console; nenhuma tecla global nem
+atalho do jogo é interceptado. O arquivo `trigger` marca o próximo frame do port.
+Trocar o foco e reagir pode demorar mais que os 8 frames anteriores disponíveis:
+registre a mudança de foco e prefira o modo programado para um evento breve.
+Alternativa sem trocar foco: outro console/processo pode criar `trigger` na pasta
+informada. Não crie o marcador antes da cena, pois ele não é consumido/removido.
+
+Para sequência reproduzível, após identificar o frame aproximado no mesmo fluxo
+desde boot, marque uma janela programada (exemplo ilustrativo, não frame validado):
+
+```powershell
+& "F:\GitRevised\SnesRecompProject\Single Player\Yoshi's Island recomp\tools\render-capture.ps1" -Exe "G:\x2\yoshi-instrumentado.exe" -ErrorId ER-01 -At 650 -Scene 'intro sem input; intervalo a confirmar'
+```
+
+Cada sessão cria `G:\x2\yoshi-render-DATA-HORA-IDUNICO\`, com `session.json`,
+`capture.tsv`, imagens `native-NNNNNNNN.ppm` e o marcador quando manual. Imagens
+PPM P6 podem ser abertas em visualizador compatível; são RGB nativo, sem escala.
+O frame marcado M inclui M-8..M+16; início precoce gera `pre_missing`. Aguarde
+até M+16 e a mensagem de exportação antes de encerrar o jogo. Uma captura por
+processo; para outra, encerre e execute o script novamente. Nenhum arquivo de
+capturas anteriores é substituído. Guarde a pasta inteira, o EXE correspondente
+e `notes.txt` com cena, inputs, defeito presente/ausente e configurações legíveis.
+Não acrescente ROM ou dumps de memória a essa pasta.
+
+O ring verifica teto de 64 MiB, suporta largura até 800 e 224 linhas, limita
+eventos PPU a 8192/frame e DMA a 512/frame. Registra perdas separadas. Os hashes
+de memória são FNV-1a: regiões 0..15 = blocos de 4096 bytes VRAM, 16 = CGRAM,
+17 = OAM baixo; amostrados em cpu_begin e draw_end, sem payload. Não representam
+o conteúdo consumido a cada pixel. Eventos de ports de conteúdo são ocultados
+antes de entrar no ring. GSU retém amostras de 64 jobs recentes, com perdas não
+quantificáveis pela API atual. A apresentação GPU não é capturada neste modo.
+Estado/registros PPU por linha estão em `regs64`; offsets com nomes estão no
+cabeçalho do TSV. `hdma_sample` é estado por linha, não timestamp de barramento.
+
+Há I/O para verificar o marcador uma vez por frame. A exportação usa uma thread
+SDL separada e apenas um lote, sem espera pelo disco no loop principal. Aguarde
+a mensagem final antes de sair: encerrar o processo pode interromper arquivos.
+Falha de criação da thread perde o lote e é informada em stderr. O custo real
+de CPU/I/O concorrente ainda depende de medição local. O script desabilita o trace
+legado no filho para evitar seu I/O contínuo. Reset aborta a coleta; save/load,
+rewind, netplay, turbo, frameskip e run-ahead invalidam a comparação proposta.
+Veja `YoshisIsland_errorRender.md` para limitações e roteiro individual.
+
+## Trace legado por intervalo
+
 Instrumentação experimental; não corrige o renderer nem confirma uma causa.
 Esta build experimental substitui o loop personalizado por `beam_frame_driver`
 local: fronteira V=225, IRQs na simulação e replay com HDMA real. Não há IRQ
@@ -92,3 +228,29 @@ Forneça trace.tsv, presents.csv, configurações, revisão/binário utilizado,
 sequência de inputs e frames/horário em que observou cada piscada. Não envie ROM
 ou dumps de memória. Não há nova captura ou validação de runtime implícita nesta
 instrumentação.
+
+## ER-06: sondas de TM/TS do raster journal
+
+A build de investiga��o exige tamb�m `yi-render-raster-probe-v1`. Use o mesmo
+comando `scripts/capture-render.ps1 -ErrorId ER-06`; a janela continua sendo
+5 segundos ap�s Enter, sem hist�rico anterior e com pasta �nica por execu��o.
+Primeiro capture o seletor est�vel, se dispon�vel, com `-Scene 'seletor antes de
+concluir fase; sem piscadas'`. Depois capture a ocorr�ncia com `-Scene 'seletor
+apos concluir fase; com piscadas; anotar fase'`. Preencha `notes.txt` com a fase,
+inputs e foco. Aguarde o marcador final antes da pr�xima coleta.
+
+`raster_probe` no TSV exporta apenas metadados: stage, clocks CPU/beam, V/H,
+slot em grava��o, flags armed/have_completed/rendering, cursor e contagem/perdas
+de cada slot. `live`, `slot0` e `slot1` t�m cinco bytes de registradores na ordem
+INIDISP, TM, TS, CGADSUB, CGWSEL. O slot conclu�do � current^1 somente quando
+have_completed=1; cursor s� deve ser interpretado no contexto do est�gio.
+Est�gios: 1/2 antes/depois da fronteira, 3/4 antes/depois de renderBegin,
+5/6 antes/depois de renderEnd, 7 in�cio CPU e 8 fim CPU. Estado por linha e
+escritas continuam nos registros existentes. N�o h� snapshot de mem�ria guest.
+
+Limite: 12 sondas/frame, sem aloca��o nem I/O por sonda; excedentes constam em
+`raster_probe_summary lost`. O teto total de 512 MiB continua verificado em
+runtime. Os hooks leem o estado, sem mudar as m�scaras nem a ordem do replay.
+A nova API do framework e o port precisam ser compilados juntos. A build n�o
+valida a hip�tese; a compara��o das pr�ximas capturas determinar� onde TM/TS
+mudam ou s�o herdados.
