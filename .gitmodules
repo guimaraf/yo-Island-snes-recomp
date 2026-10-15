@@ -1,6 +1,6 @@
 [submodule "recomp-ui"]
 	path = modules/recomp-ui
-	url = https://github.com/RetroPortingToolKit/recomp-ui.git
+	url = https://github.com/guimaraf/recomp-ui.git
 [submodule "snesrecomp"]
 	path = modules/snesrecomp
-	url = https://github.com/RetroPortingToolKit/snesrecomp.git
+	url = https://github.com/guimaraf/snesrecomp.git
