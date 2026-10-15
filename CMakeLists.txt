@@ -51,6 +51,9 @@ add_executable(SuperMarioWorld2YoshiSIslandSNESRecomp
     src/game_rtl.c
     src/gen_stubs.c
 )
+set_target_properties(SuperMarioWorld2YoshiSIslandSNESRecomp PROPERTIES
+    OUTPUT_NAME "Yoshi's Island recomp"
+)
 
 # ROM identity. rom_identity.txt is the one place the digests live: the build
 # turns it into snesrecomp_rom_identity.h (SNESRECOMP_ROM_EXPECTED_SHA256 and

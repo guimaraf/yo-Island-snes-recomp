@@ -3,7 +3,7 @@
 A native recompilation of **Super Mario World 2 - Yoshi's Island** (USA), built on
 [snesrecomp](https://github.com/RetroPortingToolKit/snesrecomp).
 
-Experimento local para avaliar a reutilização do LLE Super FX existente em Yoshi's Island.
+Local experiment to evaluate reuse of the existing Super FX LLE implementation in Yoshi's Island.
 
 
 
@@ -13,8 +13,8 @@ Experimento local para avaliar a reutilização do LLE Super FX existente em Yos
 
 ## Status
 
-Scaffolded on 2026-10-14 — **experimental port; runtime compatibility is unverified.** The layout, build,
-regeneration pipeline, CI, and packaging are wired up; the game does not run
+Scaffolded on 2026-10-14 — **experimental port; runtime compatibility is unverified.** The layout, local build,
+ROM regeneration pipeline, and packaging are wired up; the game does not run
 until the host work in `src/game_rtl.c` is done. See
 [Porting from here](#porting-from-here).
 
@@ -60,8 +60,8 @@ prefer that; `.gitignore` blocks it from ever being committed either way.
 ## Run
 
 ```sh
-./build/SuperMarioWorld2YoshiSIslandSNESRecomp                     # launcher picks the ROM
-./build/SuperMarioWorld2YoshiSIslandSNESRecomp /path/to/Super Mario World 2 - Yoshi's Island (USA).sfc # or name it and skip the launcher
+./build/"Yoshi's Island recomp"                     # launcher picks the ROM
+./build/"Yoshi's Island recomp" "/path/to/Super Mario World 2 - Yoshi's Island (USA).sfc" # or name it and skip the launcher
 ```
 
 With no ROM on the command line the build opens the recomp-ui launcher: a ROM
@@ -108,9 +108,9 @@ The scaffold stops where the game-specific work starts. In rough order:
 
 ## Multiplayer
 
-Dois assentos SNES. Netplay habilitado para os minigames cooperativos; fora deles, o título pode ignorar o segundo controle.
+Two SNES seats. Netplay is enabled for cooperative minigames; outside them, the game may ignore the second controller.
 
-Netplay inclui delay-sync e rollback opcional (`SNES_NET_MODE=rollback`).
+Netplay includes delay-sync and optional rollback (`SNES_NET_MODE=rollback`).
 
 ## License
 
@@ -120,6 +120,6 @@ carries its own terms — see `snesrecomp/LICENSE` and
 is not distributed here.
 
 
-## Hardware e experimento online
+## Hardware and online experiment
 
-Esta ROM usa Super FX 2 (GSU-2). O projeto reutiliza o núcleo Super FX em LLE e o mapeamento de cartucho da revisão fixada do framework, validados anteriormente apenas com Star Fox; Yoshi's Island não está qualificado. O header indica SlowROM, portanto o host não força FastROM. Netplay com dois controles SNES padrão está habilitado, permitindo jogar os minigames cooperativos pela sessão online. O host comum mantém a sessão também fora dos minigames, quando o jogo pode ignorar o segundo controle; não foi adicionada uma barreira de modo específica do título. A revisão fixada compila rollback e o seleciona por padrão, mas o estado de continuação do driver de frames (`g_resume_pc`) não faz parte do snapshot comum; para a primeira validação online, force delay-sync nos dois peers com `SNES_NET_MODE=delay`. Rollback precisa de integração/validação específica antes de ser considerado confiável. O host compartilhado força VSync efetivo 0 durante a sessão online e registra o breadcrumb exigido, preservando a preferência offline.
+This ROM uses Super FX 2 (GSU-2). The project reuses the framework revision's Super FX LLE core and cartridge mapping, previously validated only with Star Fox; Yoshi's Island has not been qualified. The header indicates SlowROM, so the host does not force FastROM. Netplay with two standard SNES controllers is enabled for cooperative minigames in online sessions. The shared host keeps the session active outside minigames as well, where the game may ignore the second controller; no title-specific mode barrier has been added. The pinned revision builds rollback and selects it by default, but the frame driver's continuation state (`g_resume_pc`) is not part of the common snapshot. For the first online validation, force delay-sync on both peers with `SNES_NET_MODE=delay`. Rollback needs title-specific integration and validation before it can be considered reliable. The shared host forces effective VSync to 0 during online sessions and records the required breadcrumb, while preserving the offline preference.

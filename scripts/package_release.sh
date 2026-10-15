@@ -62,7 +62,7 @@ exec bash "$IMPL" \
   --runtime-dir mods \
   --build-dir "$BUILD_DIR" \
   --artifact "$PLATFORM" \
-  --exe-name SuperMarioWorld2YoshiSIslandSNESRecomp \
+  --exe-name "Yoshi's Island recomp" \
   --zip-prefix supermarioworld2yoshisisland \
   --display-name "Super Mario World 2 - Yoshi's Island" \
   --rom-hint "$ROM_FILE" \

@@ -1,6 +1,9 @@
 # Generated recompiler output — derived from a copyrighted ROM. Never commit.
 /src/gen/
 /recomp/funcs.h
+/_errorRender/
+
+newPrompt.txt
 
 # The ROM itself, in every form. Players supply their own.
 *.sfc
@@ -18,6 +21,11 @@
 # local workspace imports and contain machine-local build artifacts.
 /recomp-ui/
 /snesrecomp/
+
+# Shared dependency checkouts are supplied by the parent workspace and stay local.
+/dependences/SDL3/
+/dependences/libjuice-1.7.2/
+/dependences/lua-5.4.9/src/
 
 # Local probe output that names paths on one machine
 /rom_probe.json

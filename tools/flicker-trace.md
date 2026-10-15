@@ -21,7 +21,7 @@ $env:YI_TRACE_SCENE = 'intro-sem-input'
 $env:SNESRECOMP_PRESENT_LOG = Join-Path $captureDir 'presents.csv'
 $env:SNESRECOMP_SCREENSHOT_FROM = '640'
 $env:SNESRECOMP_SCREENSHOT_TO = '699'
-& '.\SuperMarioWorld2YoshiSIslandSNESRecomp.exe'
+& ".\Yoshi's Island recomp.exe"
 Remove-Item Env:YI_TRACE_FILE, Env:YI_TRACE_START, Env:YI_TRACE_FRAMES, Env:YI_TRACE_SCENE, Env:SNESRECOMP_PRESENT_LOG, Env:SNESRECOMP_SCREENSHOT_FROM, Env:SNESRECOMP_SCREENSHOT_TO
 ```
 
