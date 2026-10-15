@@ -1,0 +1,39 @@
+Quero continuar o diagnóstico dos artefatos de renderização de Super Mario World 2: Yoshi’s Island (USA) neste repositório:
+
+F:\GitRevised\SnesRecompProject
+
+Responda em português do Brasil. Siga as instruções atuais do repositório e do usuário. Antes de editar, analise o pedido e informe os caminhos exatos que pretende alterar. Preserve arquivos e capturas existentes. Não inclua ROM nem dumps de conteúdo proprietário.
+
+Contexto confirmado:
+- O port inicia e chega ao gameplay.
+- A troca do driver personalizado pelo beam_frame_driver eliminou as piscadas de tela inteira na intro. O usuário confirmou isso em um teste de aproximadamente 80 segundos.
+- A captura G:\x2\yoshi-trace-20261014-202555 registrou 60 frames da intro sem quadros pretos, sem descartes e com uma fronteira V=225 por frame.
+- O executável experimental foi copiado para G:\x2. O SHA-256 registrado naquela cópia foi 3320A1C1391DE0A67F711C1A0B48AEA84161E0D9E81177660309CD667B99D095; confira o arquivo atual antes de presumir que continua igual.
+- Permanecem cinco artefatos documentados como ER-01 a ER-05: faixa escura intermitente nas nuvens; fragmentação durante a animação do inimigo; primeira linha defeituosa na tela de título; linha clara fixa no horizonte; e caixa de texto que aparece antes da animação de abertura.
+- O usuário relata que a corrupção da abertura não ocorre nas caixas de texto do gameplay nem no pause. Isso é uma observação de teste, não uma validação completa.
+- As imagens estão em `Yoshi's Island recomp_errorRender/`.
+- Capturas anteriores estão em G:\x2\yoshi-flicker-diagnostic\, G:\x2\yoshi-trace-20261014-201927\ e G:\x2\yoshi-trace-20261014-202555\. Preserve-as.
+
+Leia primeiro:
+- `YoshisIsland_errorRender.md`, na raiz. Ele contém observações, hipóteses, plano por erro e o plano de uma captura delimitada.
+- `docs/specialChips/superFX2.md`, que descreve a integração e a validação já feita.
+- `Yoshi's Island recomp/tools/flicker-trace.md`.
+- As instruções atuais e a documentação/fonte locais da revisão do framework usada pelo port, especialmente `snesrecomp/docs/FRAME_MODEL_HOSTS.md`, `beam_frame_driver.c/.h`, PPU, DMA, cartucho e Super FX.
+
+Objetivo:
+Prepare a instrumentação necessária para investigar ER-01 a ER-05 em execuções futuras, sem mascarar os defeitos. O plano existente propõe captura acionada pelo usuário, com histórico circular limitado (inicialmente 8 frames anteriores e 16 posteriores), imagens nativas e telemetria sincronizadas, limites explícitos de memória/eventos e contadores de perdas. Verifique se essa arquitetura é adequada às APIs e ao custo real da revisão local antes de implementá-la. Uma tecla acionadora não pode conflitar com controles/atalhos nem alterar o estado guest. Se o evento exigir sequência reproduzível, proponha também captura por intervalo programado.
+
+A captura deve correlacionar, quando as APIs locais permitirem:
+- frame do port, campo PPU, apresentação, linha de desenho, beam e master clocks;
+- estado PPU efetivamente aplicado e imagem nativa por linha/região;
+- escritas PPU e eventos/metadados DMA/HDMA;
+- início/fim e progresso do GSU;
+- descartes, limites e identidade/configuração do executável.
+
+Não exporte payloads de VRAM/OAM/CGRAM, ROM, SRAM, WRAM ou código do jogo. Prefira hashes e metadados. Não conclua causa apenas por correlação temporal ou inspeção estática. Separe fatos, hipóteses e resultados realmente validados.
+
+Investigue os cinco IDs individualmente. Comece por ER-03 (linha superior do título) e ER-01 (faixa nas nuvens), conforme a ordem sugerida no documento, a menos que a inspeção mostre que outro erro é mais fácil de reproduzir. Para ER-02, ER-04 e ER-05, registre os dados específicos necessários. Compare com o emulador de referência chamado Bnes somente quando houver capturas equivalentes identificadas com versão/configuração e estágio da cena.
+
+Não execute o jogo nem faça novas capturas sem eu pedir. Não faça build por padrão: siga a instrução mais recente sobre build no novo chat. Não faça alterações antes de ler o plano e declarar os caminhos exatos planejados. Depois da instrumentação, documente como eu aciono cada captura, para onde os arquivos vão e como preservá-los. Atualize `YoshisIsland_errorRender.md` com o estado real da implementação, arquivos alterados, limitações e próximos passos.
+
+Ao final, resuma alterações, verificações realizadas e o que continua dependendo do meu teste local. Não diga que um erro foi resolvido sem evidência de runtime correspondente.

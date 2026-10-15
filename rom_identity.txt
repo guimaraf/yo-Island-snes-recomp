@@ -1,0 +1,26 @@
+# ROM identity for Super Mario World 2 - Yoshi's Island — the single source of truth.
+#
+# Read by three consumers, so a revision change is made once, here:
+#   - the build   (CMake generates snesrecomp_rom_identity.h from this file)
+#   - tools/regen.sh
+#   - .github/workflows/release.yml
+#
+# Format is `key = value`, one per line; `#` starts a comment. Values may be
+# quoted. Leaving a digest empty means the build cannot verify a ROM it is
+# handed — it will say so rather than accept it.
+
+display_name    = Super Mario World 2 - Yoshi's Island
+rom_file        = Super Mario World 2 - Yoshi's Island (USA).sfc
+# Every digest of the bare image (copier header stripped), so the Retro
+# catalog can take a submission's identity from this file rather than ask
+# the submitter to hash the ROM again. The build verifies on crc32/sha256.
+expected_crc32  = d138f224
+expected_md5    = cb472164c5a71ccd3739963390ec6a50
+expected_sha1   = c807f2856f44fb84326fac5b462340dcdd0471f8
+expected_sha256 = 9b4957466798bbdb5b43a450bbb60b2591ae81d95b891430f62d53ca62e8bc7b
+rom_size        = 2097152
+mapping         = lorom
+region          = USA
+# What a mod package's [[target]] game_id must name to apply to this title
+# (snesrecomp/docs/MOD_PACKAGES.md). Stable across revisions on purpose.
+game_id         = supermarioworld2yoshisisland-usa

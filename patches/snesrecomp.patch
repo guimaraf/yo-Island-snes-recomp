@@ -1,0 +1,314 @@
+diff --git a/runner/src/desktop/config.h b/runner/src/desktop/config.h
+index af56ff1..11b80ae 100644
+--- a/runner/src/desktop/config.h
++++ b/runner/src/desktop/config.h
+@@ -92,6 +92,9 @@ typedef struct Config {
+   // Set from the launcher's dashboard checkbox. Force the launcher back with the
+   // --launcher argument or by setting SkipLauncher = 0 in config.ini.
+   bool skip_launcher;
++  /* Show the Windows console that receives stdout/stderr diagnostics.
++   * Defaults on so existing installs keep the current log-window behavior. */
++  bool enable_log;
+   bool expose_coverage_mod;
+   int coverage_capture; /* -1 absent: use Mods selection */
+ 
+diff --git a/runner/src/desktop/host_main.c b/runner/src/desktop/host_main.c
+index ff3252b..c31ac0b 100644
+--- a/runner/src/desktop/host_main.c
++++ b/runner/src/desktop/host_main.c
+@@ -379,6 +379,10 @@ static bool PresentationDecoupled(void) { return WantedPresentationHz(0) > 0; }
+  * A decoupled presentation or an explicitly disabled frame delay paces
+  * elsewhere and must not also wait on the driver. */
+ static int VSyncInterval(void) {
++  /* The host loop also pumps the netplay barrier. A monitor refresh wait here
++   * can pace simulation differently on each peer, so online sessions always
++   * present without driver vsync. Keep the saved preference for offline play. */
++  if (g_netplay_session) return 0;
+   if (PresentationDecoupled() || g_config.disable_frame_delay) return 0;
+   switch (g_config.vsync) {
+     case kSnesVSync_Off:      return 0;
+@@ -387,6 +391,23 @@ static int VSyncInterval(void) {
+   }
+ }
+ 
++/* Keep diagnostic output active while allowing the launcher to hide only the
++ * Windows console window. Other platforms control stdout/stderr themselves. */
++static void ConsoleLogSetVisible(bool visible) {
++#ifdef _WIN32
++  HWND console = GetConsoleWindow();
++  DWORD console_processes[2];
++  DWORD process_count = GetConsoleProcessList(
++      console_processes, (DWORD)(sizeof(console_processes) / sizeof(console_processes[0])));
++  /* A developer may run the game from an existing terminal. Never hide that
++   * shared terminal; this option owns only the game's private log console. */
++  if (console && process_count == 1)
++    ShowWindow(console, visible ? SW_SHOW : SW_HIDE);
++#else
++  (void)visible;
++#endif
++}
++
+ static int WindowBaseWidth(int frame_w) {
+   if (g_game->window_base_width) return g_game->window_base_width(frame_w);
+   /* 4:3 on a 240-line window: 256 -> 320. */
+@@ -2625,6 +2646,7 @@ static void LauncherSeed(RecompLauncherCSettings *ls, RecompLauncherCGameInfo *g
+   ls->deadzone[0] = ls->deadzone[1] =
+       (g_config.gamepad_deadzone * 100 + 32767 / 2) / 32767;
+   ls->skip_launcher = g_config.skip_launcher;
++  ls->enable_log    = g_config.enable_log ? 1 : 0;
+   ls->msu1_enabled  = 0;
+   /* Display rows the framework host wires (see FrameBlendConfigure,
+    * RendererApply, the vsync flags at presenter creation, and
+@@ -2753,6 +2775,8 @@ static void LauncherCommit(const RecompLauncherCSettings *ls, const char *config
+   g_config.enable_gamepad[1]   = ls->player_src[1] == 2;
+   g_config.gamepad_deadzone    = (ls->deadzone[0] * 32767 + 50) / 100;
+   g_config.skip_launcher       = ls->skip_launcher != 0;
++  g_config.enable_log          = ls->enable_log != 0;
++  ConsoleLogSetVisible(g_config.enable_log);
+   g_config.frame_blend         = ls->frame_blend != 0;
+   g_config.run_ahead           = ls->run_ahead;
+   if (game->rewind_settings) {
+@@ -2988,6 +3012,8 @@ static void RunInGameLauncher(bool *running, const char **exit_reason) {
+ }
+ 
+ int snesrecomp_desktop_main(const SnesDesktopHostGame *game, int argc, char **argv) {
++  /* Do not flash the console before the persisted preference is available. */
++  ConsoleLogSetVisible(false);
+   if (!game || !game->game_info || !game->display_name) {
+     fprintf(stderr, "snesrecomp_desktop_main: descriptor needs display_name and game_info\n");
+     return 2;
+@@ -3107,6 +3133,7 @@ int snesrecomp_desktop_main(const SnesDesktopHostGame *game, int argc, char **ar
+       ParseConfigFile("config.local.ini");
+     }
+   }
++  ConsoleLogSetVisible(g_config.enable_log);
+   /* Before after_config, so a port that wants to inspect the parsed rewind
+    * settings sees the same opt-in the writer will honour. */
+   if (game->rewind_settings) ConfigEnableRewindKeys();
+@@ -3584,6 +3611,9 @@ error_reading:;
+   host_report_breadcrumb("renderer initialized: %s",
+       g_config.output_method == kOutputMethod_OpenGL ? "opengl" :
+       g_config.output_method == kOutputMethod_SDLSoftware ? "sdl-software" : "sdl");
++  if (g_netplay_session)
++    host_report_breadcrumb(
++        "netplay: VSync disabled for session (effective interval=0; saved setting preserved)");
+ 
+   g_audio_mutex = SDL_CreateMutex();
+   if (!g_audio_mutex) Die("No mutex");
+diff --git a/runner/src/desktop/mmx_config.c b/runner/src/desktop/mmx_config.c
+index 3757ebf..1b2fe46 100644
+--- a/runner/src/desktop/mmx_config.c
++++ b/runner/src/desktop/mmx_config.c
+@@ -595,6 +595,8 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
+       return ParseBool(value, &g_config.enable_snes9x_oracle);
+     } else if (StringEqualsNoCase(key, "SkipLauncher")) {
+       return ParseBool(value, &g_config.skip_launcher);
++    } else if (StringEqualsNoCase(key, "EnableLog")) {
++      return ParseBool(value, &g_config.enable_log);
+     }
+   } else if (section == 6) {
+     if (StringEqualsNoCase(key, "PlayerName")) {
+@@ -676,6 +678,7 @@ void ParseConfigFile(const char *filename) {
+   g_config.gamepad_deadzone = SNES_CONFIG_DEFAULT_DEADZONE;
+   g_config.display_aspect = kSnesDisplayAspect_Crt4x3;
+   g_config.skip_launcher = false;
++  g_config.enable_log = true;
+   /* Rewind's built-in ring, matching snes_rewind.c's own defaults so a host
+    * that opts into the launcher rows starts from what it already had. */
+   g_config.rewind_enabled = true;
+@@ -885,6 +888,7 @@ void WriteConfigFile(const char *filename) {
+     { "GamepadMap", "EnableGamepad1" },
+     { "GamepadMap", "EnableGamepad2" },
+     { "General",    "SkipLauncher" },
++    { "General",    "EnableLog" },
+     { "GamepadMap", "GamepadDeadzone" },
+     { "Netplay",    "PlayerName" },
+     { "Graphics",   "FrameBlend" },
+@@ -921,6 +925,7 @@ void WriteConfigFile(const char *filename) {
+   CfgSet(kvs, N, "GamepadMap", "EnableGamepad2", "%s",
+          g_config.enable_gamepad[1] ? "true" : "false");
+   CfgSet(kvs, N, "General", "SkipLauncher", "%d", g_config.skip_launcher ? 1 : 0);
++  CfgSet(kvs, N, "General", "EnableLog", "%d", g_config.enable_log ? 1 : 0);
+   CfgSet(kvs, N, "GamepadMap", "GamepadDeadzone", "%d", g_config.gamepad_deadzone);
+   CfgSet(kvs, N, "Netplay", "PlayerName", "%s", g_config.netplay_player_name);
+   CfgSet(kvs, N, "Graphics", "FrameBlend", "%d", g_config.frame_blend ? 1 : 0);
+diff --git a/runner/src/snes/ppu.c b/runner/src/snes/ppu.c
+index 25dcfe0..d53c03a 100644
+--- a/runner/src/snes/ppu.c
++++ b/runner/src/snes/ppu.c
+@@ -2292,6 +2292,11 @@ static void PpuDrawBackgrounds(Ppu *ppu, int y, bool sub) {
+     if (ppu->lineHasSprites)
+       PpuDrawSprites(ppu, y, sub, true);
+ 
++    if (snes_frame_counter == 1469 && y == 171) {
++      fprintf(stderr, "[BG y=171 f=1469 sub=%d] lineHasSprites=%d obj[60]=0x%04X bg[60]=0x%04X\n",
++              sub, ppu->lineHasSprites, ppu->objBuffer.data[60 + kPpuExtraLeftRight], ppu->bgBuffers[sub].data[60 + kPpuExtraLeftRight]);
++    }
++
+     if (ppu->wsMode2CaptureLayer) {
+       PpuCaptureBackground_4bpp(ppu, y, sub, 0);
+       PpuCaptureBackground_4bpp(ppu, y, sub, 1);
+@@ -2304,12 +2309,22 @@ static void PpuDrawBackgrounds(Ppu *ppu, int y, bool sub) {
+         mosaic_size && PPU_mosaicEnabled(ppu, 0));
+     PpuFinishBackgroundOverlay(ppu, y, sub, 0, layerbuf);
+ 
++    if (snes_frame_counter == 1469 && y == 171) {
++      fprintf(stderr, "[BG y=171 f=1469 sub=%d] after BG1: bg[60]=0x%04X\n",
++              sub, ppu->bgBuffers[sub].data[60 + kPpuExtraLeftRight]);
++    }
++
+     layerbuf = PpuBeginBackgroundOverlay(ppu, y, sub, 1);
+     PpuDrawBackground_4bpp_policy(
+         ppu, layerbuf, y, sub, 1, 0xb100, 0x7100,
+         mosaic_size && PPU_mosaicEnabled(ppu, 1));
+     PpuFinishBackgroundOverlay(ppu, y, sub, 1, layerbuf);
+ 
++    if (snes_frame_counter == 1469 && y == 171) {
++      fprintf(stderr, "[BG y=171 f=1469 sub=%d] after BG2: bg[60]=0x%04X\n",
++              sub, ppu->bgBuffers[sub].data[60 + kPpuExtraLeftRight]);
++    }
++
+     uint bg3prio = PPU_bg3priority(ppu) ? 0xf200 : 0x3200;
+     layerbuf = PpuBeginBackgroundOverlay(ppu, y, sub, 2);
+     PpuDrawBackground_2bpp_policy(
+@@ -2865,6 +2880,19 @@ static bool ppu_evaluateSprites(Ppu* ppu, int line) {
+     index += 2;
+   }
+ 
++  if (snes_frame_counter == 1468 || snes_frame_counter == 1469 || snes_frame_counter == 1470) {
++    if (line == 170) {
++      fprintf(stderr, "[EVAL line=170 f=%d] spritesFound=%d objSize=%d obsel=0x%02X oamadd=0x%02X%02X\n",
++              snes_frame_counter, spritesFound, PPU_objSize(ppu), ppu->obsel, ppu->oamaddh, ppu->oamaddl);
++      for (int s = 0; s < spritesFound; s++) {
++        uint8_t idx = foundSprites[s];
++        fprintf(stderr, "   found[%d]: slot=%d x=%d y=%d sz=%d oam1=0x%04X\n",
++                s, idx >> 1, PpuDecodeOamX(ppu, idx), ppu->oam[idx] >> 8,
++                (ppu->highOam[idx >> 3] >> ((idx & 7) + 1)) & 1, ppu->oam[idx+1]);
++      }
++    }
++  }
++
+   for(int i = spritesFound; i > 0; i--) {
+     index = foundSprites[i - 1];
+     uint8_t row = line - (ppu->oam[index] >> 8);
+@@ -2902,6 +2930,10 @@ static bool ppu_evaluateSprites(Ppu* ppu, int line) {
+                      (((oam1 & 0xf) + (usedCol >> 3)) & 0xf);
+             const uint16 *addr = &PpuRenderVram(ppu)[(objAdr + usedTile * 16 + (row & 0x7)) & 0x7fff];
+             uint32 plane = addr[0] | addr[8] << 16;
++            if ((snes_frame_counter == 1468 || snes_frame_counter == 1469 || snes_frame_counter == 1470) && line == 170) {
++              fprintf(stderr, "   [TILE slot=%d col=%d] row=%d usedTile=0x%02X a0=0x%04X a8=0x%04X plane=0x%08X\n",
++                      index >> 1, col, row, usedTile, addr[0], addr[8], plane);
++            }
+             int px_left = IntMax(-(col + x + kPpuExtraLeftRight), 0);
+             int px_right = IntMin(256 + kPpuExtraLeftRight - (col + x), 8);
+             PpuZbufType *dst = ppu->objBuffer.data + col + x + px_left + kPpuExtraLeftRight;
+@@ -3175,6 +3207,19 @@ static const PpuRasterField *s_raster_render;
+ static int s_raster_next;
+ static uint8_t s_raster_hdmaen;
+ static int s_raster_hdmaen_pending;
++static PpuDisplayObserver s_display_observer;
++void ppu_set_display_observer(PpuDisplayObserver observer) {
++  s_display_observer = observer;
++}
++void ppu_rasterStats(unsigned *count, unsigned *dropped, unsigned *next,
++                     unsigned *completed) {
++  const PpuRasterField *f = s_raster_rendering && s_raster_render
++      ? s_raster_render : &s_field[s_raster_cur];
++  *count = (unsigned)f->count;
++  *dropped = f->dropped;
++  *next = (unsigned)s_raster_next;
++  *completed = (unsigned)s_raster_have_completed;
++}
+ static struct {
+   uint8_t oamAdr, oamInHigh, oamSecondWrite, oamBuffer;
+ } s_raster_port;
+@@ -3227,6 +3272,7 @@ void ppu_rasterBegin(Ppu *ppu) {
+ }
+ 
+ void ppu_rasterFieldBoundary(void) {
++  if (s_display_observer) s_display_observer(1, 0, 0);
+   Ppu *ppu = raster_machine_ppu();
+   if (!s_raster_armed || !ppu)
+     return;
+@@ -3398,6 +3444,8 @@ int ppu_rasterDebugDump(char *out, int cap) {
+ }
+ 
+ void ppu_write(Ppu* ppu, uint8_t adr, uint8_t val) {
++  if (s_display_observer && ppu == raster_machine_ppu() && adr <= 0x33)
++    s_display_observer(0, (uint16_t)(0x2100u | adr), val);
+   ppu_wlog_note(adr, val);
+   /* Every path into the PPU -- CPU stores, DMA, beam HDMA -- is history the
+    * raster journal must see; recording here rather than in one caller is
+diff --git a/runner/src/snes/ppu.h b/runner/src/snes/ppu.h
+index 9263633..9444f76 100644
+--- a/runner/src/snes/ppu.h
++++ b/runner/src/snes/ppu.h
+@@ -602,6 +602,12 @@ void ppu_rasterApplyLine(Ppu *ppu, int line);
+ void ppu_rasterFieldBoundary(void);
+ /* Disarm, for a machine rebuild (session reset). */
+ void ppu_rasterReset(void);
++/* Optional read-only host observer: event 0=write before application,
++ * 1=field boundary. Includes bulk ports; never exports memory contents. */
++typedef void (*PpuDisplayObserver)(int event, uint16_t reg, uint8_t val);
++void ppu_set_display_observer(PpuDisplayObserver observer);
++void ppu_rasterStats(unsigned *count, unsigned *dropped, unsigned *next,
++                     unsigned *completed);
+ 
+ /* Scanout latch bypass — set by the debug server around render_inject so an
+  * injected OAM/CGRAM state is rendered as given. A frame-model host that
+diff --git a/runner/src/snes/snes.c b/runner/src/snes/snes.c
+index 5c03cfe..384fec6 100644
+--- a/runner/src/snes/snes.c
++++ b/runner/src/snes/snes.c
+@@ -24,6 +24,12 @@
+ #include "../ppu_dma_trace.h"
+ 
+ int snes_frame_counter;
++static SnesBeamLineHook s_beam_line_hook;
++
++void snes_set_beam_line_hook(SnesBeamLineHook hook) {
++  s_beam_line_hook = hook;
++}
++
+ static const double apuCyclesPerMaster = (32040 * 32) / (1364 * 262 * 60.0);
+ 
+ bool snes_next_irq_master(const Snes *snes, uint64_t now, uint64_t *out) {
+@@ -463,6 +469,7 @@ static uint32_t snes_advance_beam(Snes *snes, uint32_t clocks, bool check_irq) {
+           h = 0; v++; if (v >= 262u) v = 0;
+           if (v == 225u) { snes->rdnmiPending = true; ppu_rasterFieldBoundary(); }
+           if (v == 0u) snes->rdnmiPending = false;
++          if (s_beam_line_hook) s_beam_line_hook(snes, (uint16_t)v);
+         }
+         snes->hPos = (uint16_t)h;
+         snes->vPos = (uint16_t)v;
+@@ -509,6 +516,7 @@ static uint32_t snes_advance_beam(Snes *snes, uint32_t clocks, bool check_irq) {
+         }
+         snes->dbgLatchedThisField = 0;
+       }
++      if (s_beam_line_hook) s_beam_line_hook(snes, (uint16_t)v);
+     }
+   }
+   snes->hPos = (uint16_t)h;
+diff --git a/runner/src/snes/snes.h b/runner/src/snes/snes.h
+index 013e785..b3f3ed0 100644
+--- a/runner/src/snes/snes.h
++++ b/runner/src/snes/snes.h
+@@ -10,6 +10,10 @@
+ 
+ typedef struct Snes Snes;
+ typedef void (*SnesMasterClockChargeHook)(Snes *snes, uint64_t clocks);
++/* Host observation only: called once when the beam enters a new scanline.
++ * The explicit line is authoritative; hPos/vPos are committed after the walk.
++ * Hooks are host policy and are not part of the guest savestate. */
++typedef void (*SnesBeamLineHook)(const Snes *snes, uint16_t line);
+ typedef void (*SnesWramWriteLogHook)(uint32_t ram_off, uint8_t value,
+                                      const char *via);
+ 
+@@ -146,6 +150,7 @@ void snes_sync_master_clock(Snes *snes, uint64_t master_clock);
+  * step that can jump over h=1024 and drop that line's HDMA transfer (SimCity
+  * scenario view: every 4th scanline one line late, issue #63). */
+ void snes_set_master_clock_charge_hook(SnesMasterClockChargeHook hook);
++void snes_set_beam_line_hook(SnesBeamLineHook hook);
+ /* Notified on every direct WRAM store that bypasses cpu_write8/16 (WMDATA
+  * $2180, snes_write's WRAM and mirror stores, i.e. DMA A-bus writes). */
+ void snes_set_wram_write_log_hook(SnesWramWriteLogHook hook);

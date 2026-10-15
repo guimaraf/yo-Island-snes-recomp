@@ -1,0 +1,15 @@
+[submodule "recomp-ui"]
+	path = modules/recomp-ui
+	url = https://github.com/RetroPortingToolKit/recomp-ui.git
+[submodule "snesrecomp"]
+	path = modules/snesrecomp
+	url = https://github.com/RetroPortingToolKit/snesrecomp.git
+[submodule "SDL3"]
+	path = dependences/SDL3
+	url = https://github.com/libsdl-org/SDL.git
+[submodule "libjuice-1.7.2"]
+	path = dependences/libjuice-1.7.2
+	url = https://github.com/paullouisageneau/libjuice.git
+[submodule "lua-5.4.9-src"]
+	path = dependences/lua-5.4.9/src
+	url = https://github.com/lua/lua.git

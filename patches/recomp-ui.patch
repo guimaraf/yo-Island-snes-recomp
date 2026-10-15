@@ -1,0 +1,45 @@
+diff --git a/src/common/backends/imgui/launcher_imgui.cpp b/src/common/backends/imgui/launcher_imgui.cpp
+index 6ca290b..145089b 100644
+--- a/src/common/backends/imgui/launcher_imgui.cpp
++++ b/src/common/backends/imgui/launcher_imgui.cpp
+@@ -4344,6 +4344,14 @@ void draw_display_controls(LauncherModel* m, const LauncherTheme& th) {
+         }
+     }
+ 
++    row_label_right("Enable Log", th, cb);
++    bool enable_log = m->s.enable_log != 0;
++    if (ImGui::Checkbox("##enable_log", &enable_log))
++        m->s.enable_log = enable_log ? 1 : 0;
++    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
++        ImGui::SetTooltip("Shows the diagnostic console window. Logging stays "
++                          "active when the window is hidden.");
++
+     if (m->has_skip_fmv) {
+         row_label_right("Skip FMVs", th, cb);
+         bool sk = m->s.auto_skip_fmv != 0;
+diff --git a/src/common/launcher_settings.inc b/src/common/launcher_settings.inc
+index 352a587..b05c21b 100644
+--- a/src/common/launcher_settings.inc
++++ b/src/common/launcher_settings.inc
+@@ -52,6 +52,7 @@ static const Setting kSettings[] = {
+     OPTIONAL("Sound", "Msu1Enabled", msu1_enabled, BOOLEAN, 0, 1, msu1_supported),
+     OPTIONAL("Sound", "Msu1Dir", msu1_dir, TEXT, 0, 0, msu1_supported),
+     BOOL("General", "SkipLauncher", skip_launcher),
++    BOOL("General", "EnableLog", enable_log),
+     OPTIONAL("General", "RunAhead", run_ahead, NUMBER, 0,
+              RECOMP_LAUNCHER_RUN_AHEAD_MAX, has_run_ahead),
+     OPTIONAL("Rewind", "Enabled", rewind_enabled, BOOLEAN, 0, 1, has_rewind_depth),
+diff --git a/src/recomp_launcher.h b/src/recomp_launcher.h
+index efb6321..b424b93 100644
+--- a/src/recomp_launcher.h
++++ b/src/recomp_launcher.h
+@@ -1568,6 +1568,9 @@ struct RecompLauncherCSettings {
+      * additively; a zero-initialized host reads as unset. */
+     int  quality_preset;
+     int  quality_base;
++    /* Whether the host's diagnostic console window is visible.
++     * 0 = hidden, 1 = visible. Appended for ABI stability. */
++    int  enable_log;
+ };
+ #define RECOMP_LAUNCHER_HAS_ZAPPER_SETTINGS 1
+ 
