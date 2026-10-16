@@ -20,8 +20,8 @@ necessarily the video's chronological order.
 - That run's report recorded 4,807 simulations and presentations in
   approximately 80.35 seconds. Detailed telemetry covers only the configured
   interval, not all 80 seconds.
-- ER-01 through ER-05 and ER-07 remain open; ER-06 is resolved in the tested scenario
-  documented below. Fixing the flicker does not
+- ER-01, ER-02, and ER-07 remain open. ER-03, ER-04, ER-05, and ER-06 are
+  resolved in the tested scenarios documented below. These fixes do not
   demonstrate that every rasterization detail is correct.
 - The user also tested the emulator named **Bnes** for comparison. No version or
   configuration for that emulator, identified reference/recomp frame pairs, or
@@ -30,7 +30,7 @@ necessarily the video's chronological order.
   claimed as proven. Preserve the reported spelling; do not assume another core.
 - Static frames show appearance but do not prove intermittency, duration, or
   temporal sequence. Those aspects are recorded as user reports.
-- The hypotheses for ER-01 through ER-05 and ER-07 guide measurements; none is a confirmed cause. Super FX
+- The hypotheses for the open issues ER-01, ER-02, and ER-07 guide measurements; none is a confirmed cause. Super FX
   is part of the execution path, not an automatic explanation.
 
 ## Tracking list
@@ -39,9 +39,9 @@ necessarily the video's chronological order.
 | --- | --- | --- | --- |
 | ER-01 | Dark horizontal band near the bottom of the sky/clouds | Images 1 and 2; reported intermittency | Open |
 | ER-02 | Block corruption while the enemy approaches or leaves | Image 3 for comparison and affected image 4 | Open |
-| ER-03 | First line of the title screen has pixels with discrepant colors | Image 5; reported intermittency | Open |
-| ER-04 | Interactive objects (including stationary enemies and the pushable ball) shift horizontally relative to the scenery | User reports and gameplay captures; camera-motion, stationary-camera, and contact cases | Open; runtime investigation in progress |
-| ER-05 | Text box appears too early or opens in the wrong sequence | Images 6 and 7; temporal order reported by the user | Open; text-box opening sequence not yet captured completely |
+| ER-03 | First line of the title screen has pixels with discrepant colors | Image 5; user confirmed the fix in the tested title-screen scenario | Resolved in the tested scenario on October 15, 2026; commits `cc8c0ae`, `46fc4fa` |
+| ER-04 | Interactive objects (including stationary enemies and the pushable ball) shift horizontally relative to the scenery | User-validated World 1-2 block and World 1 ball scenarios after raster-history fixes | Resolved in the tested scenarios on October 15, 2026; commits `7264416`, `97111a4` |
+| ER-05 | Text box appears too early or opens in the wrong sequence | Continuous capture with per-frame input; user repeated text-box openings after the HDMA source-history fix and confirmed the defect no longer occurs | Resolved in the tested scenario on October 16, 2026 |
 | ER-06 | Flicker when returning to the level selector after completing a level | Before/after captures and user repetition of the trigger | Resolved in the tested scenario on October 15, 2026; commit `493f08b` |
 | ER-07 | Fixed bright horizontal line behind the title-screen mountains | Image 5; reported persistence | Open |
 
@@ -102,8 +102,9 @@ additional fragmentation compared with the reference.
 
 ## ER-03 and ER-07 — two distinct lines on the title screen
 
-**ER-03, observation:** a line of discrepant pixels appears at the top edge of
-the game image. The user reports that it alternates with a normal line.
+**ER-03, original observation:** a line of discrepant pixels appeared at the
+top edge of the game image. The user reported that it alternated with a normal
+line.
 
 **ER-07, observation:** a thin bright/yellowish line crosses the background at
 the horizon, behind the mountains. The user reports that it is fixed and does
@@ -112,19 +113,27 @@ not flicker.
 Treat these as separate cases: their different positions, persistence, and
 appearance do not justify assuming a single cause.
 
-**ER-03 hypotheses:** first-line initialization, framebuffer origin/pitch,
-raster state applied to the first line, or updated content. **ER-07
-hypotheses:** raster transition involving layers/palette/color math, or a window
-boundary. A detail present in the reference still needs to be ruled out.
+**ER-03 correction and validation:** the user confirmed that the title-screen
+first-line color artifact was corrected in the tested scenario. The associated
+change moved HDMA processing before scanline rendering and removed the separate
+first-line HDMA priming call. This change did not resolve ER-05; the text-box
+issue remains a separate open case.
 
-**Next evidence:** title-screen pairs with ER-03 present/absent and an
-equivalent reference for ER-07; compare the native line with the presented
-image to separate rendering from scaling/presentation. Do not infer the exact
-SNES scanline from its position in a scaled capture.
+**Implementation:** `modules/snesrecomp/runner/src/beam_frame_driver.c`;
+framework commit `cc8c0ae` (`fix: apply HDMA before scanline rendering`), pinned
+by project commit `46fc4fa` (`chore: pin HDMA scanline fix`).
 
-**Resolution criteria:** ER-03 has no intermittent residual pixels; ER-07 has
-color continuity compatible with the reference, without removing legitimate
-detail.
+**ER-07 hypotheses:** raster transition involving layers/palette/color math, or
+a window boundary. A detail present in the reference still needs to be ruled
+out.
+
+**Next evidence for ER-07:** an equivalent reference capture; compare the native
+line with the presented image to separate rendering from scaling/presentation.
+Do not infer the exact SNES scanline from its position in a scaled capture.
+
+**Resolution criteria:** ER-03 is resolved in the tested scenario. ER-07 still
+requires color continuity compatible with the reference, without removing
+legitimate detail.
 
 ![Image 5 — discrepant first line and bright horizon line](<_errorRender/imagem05_YoshisIsland_errorRender.png>)
 
@@ -165,9 +174,9 @@ low/high OAM and CGRAM hashes, OAM write counters, and bounded snapshots of up
 to 128 object slots at two phases. Slots can be reused; their signatures and
 geometry do not prove persistent object identity, visibility, or physics.
 Coordinates precede widescreen/HUD adjustments, and nominal size follows the
-renderer model. The probes are passive and do not correct ER-04. Frame alignment
-between object state, camera scroll, and presentation remains a hypothesis to
-test, not a demonstrated cause.
+renderer model. At the time, the probes were passive and did not correct ER-04.
+The later fix came from preserving effective PPU state over raster time, not
+from treating the earlier frame-alignment correlation as proof of the cause.
 
 The timed capture retains approximately 120 complete frames after five seconds
 of preparation and two seconds of recording. For future ER-04 comparisons,
@@ -177,13 +186,89 @@ images to confirm object identity and compare object position with scenery,
 camera scroll, and line/frame timing. Captures made under the former ER-05
 manifest label retain that provenance.
 
-**Resolution criterion:** in matched runtime scenes, interactive objects stay
-at the expected position relative to the scenery unless gameplay contact or
-their own movement should move them. Validate stationary enemies and the ball
-without contact, and distinguish actual contact motion from camera/rendering
-displacement. No ER-04 fix is established by correlation alone.
+**Correction:** the root cause was temporal inconsistency during visual
+reconstruction. The renderer replayed scanline register/OAM changes, but
+objects could be drawn with memory from a different point in the field. The
+framework now keeps a per-field OAM baseline and records the effective OAM
+updates with their scanline positions. It also keeps VRAM and CGRAM baselines
+and a bounded per-field journal of committed writes. During rendering, it
+reconstructs those memories as of each scanline, so sprite coordinates,
+graphics, and palette are read from a coherent point in raster time. At the end
+of rendering, guest memory, PPU ports, latches, and counters are restored.
+Writes through both the SNES PPU ports and the AOT `WriteVramWord` path are
+recorded. Memory-journal capacity and overflow accounting are independent of
+the register/OAM journal.
 
-## ER-05 — text-box opening sequence
+**Files changed in `modules/snesrecomp`:**
+`runner/src/common_rtl.c`, `runner/src/snes/ppu.c`, `runner/src/snes/ppu.h`,
+and `tests/ppu/ppu_raster_journal_test.c`. The framework fix is commit
+`97111a4`; the project pins it in commit `7264416`.
+
+**Validation:** the user confirmed the growing block in World 1-2 remains
+stable while the scene scrolls, and the ball in World 1 remains stable while
+jumping and moving left and right. The user also confirmed that the character
+flicker introduced during the first alignment fix is gone after the VRAM/CGRAM
+history change. Five ROM-free PPU tests passed, covering the raster journal,
+sprite limits, world mirroring, elastic band, and Mode 7 HD. The tested build
+was copied to `G:\x2\Yoshi's Island recomp.exe` (SHA-256
+`247A8E4DF1C9BAD343476E33EAC72A396AAEECDF9BE8C3DF988A5739222AE97E`).
+
+**Status:** resolved in the tested scenarios. The reported block and ball
+scenarios and character flicker were checked by the user; this does not claim
+that every interactive object, level, or raster effect in the game has been
+validated. The original resolution criterion is met for these scenarios;
+additional runtime cases can be recorded if they reproduce the defect.
+
+## ER-05 — text-box opening sequence — resolved in the tested scenario
+
+**Resolution confirmed on October 16, 2026:** after testing the updated
+executable, the user exercised the text-box opening several times and
+confirmed that the premature full-box appearance, disappearance and repeated
+growth no longer occur. ER-05 is resolved in that tested scenario. This is
+user-reported post-fix validation; no new post-fix capture was supplied, and
+the report does not separately identify which renderers were retested or
+establish frame-exact equivalence with a reference emulator.
+
+**Pre-fix evidence:** `G:\x2\yoshi-render-20261015-235732-d47fba32` contains
+600 consecutive frames (3133–3732), per-frame controller masks and the
+`yi-render-input-v1` runtime marker. In renderer B/new, the complete box
+appears prematurely in frame 3276, followed by the black window with a small
+colored area in 3277; the first logical SNES A press is in 3289. In renderer
+A/legacy, the equivalent transition is 3549–3550, before the first logical A
+press in 3581. The controller mask is zero at both defective transitions.
+These events therefore do not coincide with an A advance. Normal advances
+after the down arrow are not classified as premature input or acceleration.
+The renderer changes from new to legacy in frame 3439, with a recorded
+keyboard R event. The user's reported E press was not monitored.
+
+**Corrective mechanism:** PPU registers were reconstructed from the completed
+field's journal while render-walk HDMA could read live WRAM tables and DMA
+configuration prepared for a different stage. The fix captures WRAM and DMA
+configuration when the beam enters line 0, associates them with that field,
+uses them during reconstruction and restores the guest's live RAM/DMA state
+afterward. Vblank journal writes, including HDMAEN, are applied before HDMA
+initialization. HDMA remains before each line's rendering, preserving the
+ordering used by the ER-03 fix; no buffer clearing or frame hiding was added.
+
+Changed framework files: `runner/src/snes/ppu.c`, `runner/src/snes/ppu.h`,
+`runner/src/snes/snes.c`, `runner/src/beam_frame_driver.c`, and
+`tests/ppu/ppu_raster_journal_test.c`, all under `modules/snesrecomp/`.
+The source snapshot represents the start of the visible field, not a
+per-scanline WRAM-write journal; the successful scenario does not certify
+effects that rewrite HDMA tables during visible lines.
+
+**Build and checks:** the game build completed successfully. The raster
+journal test, including completed-field HDMA source isolation, repeated
+reconstruction and guest-state restoration, passed. The sprite-limit,
+world-mirror, elastic-band and Mode 7 regression tests also passed. The EXE
+was copied to `G:\x2\Yoshi's Island recomp.exe`, with matching source and
+destination SHA-256:
+`8B4E074FF8E8C5B72EBACDDD004C78BDA9CB42365139EAB8BA9DB08946A3BAFD`.
+These automated checks and the user's visual confirmation are distinct
+evidence. No separate post-fix ER-03 retest was reported in this confirmation.
+
+The material below preserves the original symptom and investigation history;
+pending steps described there are superseded by the resolution above.
 
 **Scope:** this issue concerns only the opening **text box** (the dialogue
 window and its text), including its reported premature appearance and opening
@@ -194,7 +279,7 @@ the text-box behavior with the ER-06 fix without assuming a shared cause.
 already visible. Image 7 contains a large black rectangle and only a small
 green region in the center, with fragments of letters. In isolation, each
 image could belong to a different animation stage; the temporal defect depends
-on the report and a future frame sequence.
+on the report and the subsequent continuous capture documented above.
 
 **Temporal report:** the expected behavior is for the black window to grow
 first, followed by the colored text box and text expanding. In the recomp, the
@@ -207,7 +292,7 @@ this as a hypothesis, not a conclusion. Other possibilities include window or
 mask state from a different moment than the content, upload/replay ordering, or
 a line that was not redrawn. Do not apply buffer clearing or a latch indiscriminately.
 
-**Next evidence:** a continuous sequence starting before the opening, including
+**Historical next evidence (obtained before the fix):** a continuous sequence starting before the opening, including
 the first frame where the text box appears, its disappearance, and its growth;
 track windows, layers, transfers, and line hashes. Compare against the same
 opening in the reference.
@@ -229,14 +314,15 @@ The script requires `yi-render-box-v1` in the executable before it starts.
 The initial probe executable deployed to `G:\x2\Yoshi's Island recomp.exe` had SHA-256
 `E201C9E40A7E1F9AA12B71E6FCC491AE318A249BEEF4ADB061177E871C5F1F27`. The
 updated script is `G:\x2\scripts\capture-render.ps1`. Runtime capture and
-analysis of the text box are still pending. The later motion-probe work is
+analysis were pending at that initial stage and were subsequently completed
+as documented above. The later motion-probe work is
 documented under ER-04 and does not redefine this text-box issue.
 
 The motion probe, capture timing, and object-motion test cases are documented
 under ER-04. They are kept separate from this text-box issue even though the
 same capture executable and telemetry format can serve both investigations.
 
-The remaining ER-05 question is specifically whether the opening text box
+The original ER-05 investigation question was specifically whether the opening text box
 appears too early, disappears, and then grows in the expected order. Capture
 the complete text-box opening and use a gameplay or pause **text box** as a
 control. Identify the exact message and stage in `-Scene`; do not treat an
@@ -301,15 +387,11 @@ in the opening sequence observed by the user.
 
 ## Suggested investigation order
 
-1. **ER-03:** isolate the first line; it is spatially small and easy to compare
-   in the native framebuffer and the presented image.
-2. **ER-01 and ER-07:** measure the horizontal bands separately; share the
+1. **ER-01 and ER-07:** measure the horizontal bands separately; share the
    raster-observation method without assuming a shared cause.
-3. **ER-02:** capture the enemy transition and verify upload/content consistency.
-4. **ER-04:** measure interactive-object motion with a moving camera, a still
-   camera, no contact, and intentional contact; include stationary enemies.
-5. **ER-05:** capture the text-box opening sequence and compare its window
-   state and content with gameplay/pause text boxes that have no reported issue.
+2. **ER-02:** capture the enemy transition and verify upload/content consistency.
+ER-05 is resolved in the tested scenario. Reopen its investigation only if the
+text-box opening defect returns; preserve the existing captures for comparison.
 
 This order is a diagnostic proposal, not a required priority. If one event is
 easier to reproduce, start with the most complete evidence.
@@ -410,7 +492,8 @@ changes but cannot identify the responsible tile by themselves.
   distinguishing window configuration from the effective result.
 - **Framebuffer:** hash by line and region of interest, count non-black pixels,
   record valid dimensions and pitch, and indicate redrawn lines. Compare native
-  output with presentation to locate ER-03 without masking the defect.
+  output with presentation if the ER-03 title-screen artifact regresses; the
+  tested scenario is currently resolved.
 - **DMA/HDMA:** channel, destination, size, start/end when the model allows,
   enable state, and table advancement. Record the limits of per-byte timing
   precision; do not invent timestamps the API does not provide. Correlate hash
@@ -445,9 +528,9 @@ for passive capture.
 1. **Validate capture:** confirm that trigger, images, IDs, and logs agree;
    check limits and drops. Repeat the intro segment without blackouts as a
    control. Capture must not modify guest clocks, IRQs, or image output.
-2. **Title screen — ER-03:** capture normal and affected first lines, including
-   neighboring lines, in native and presented output. Investigate origin, pitch,
-   valid area, and redraw only if the divergence points to that path.
+2. **Title screen — ER-03 regression check:** the tested scenario is resolved.
+   Repeat the native/presented first-line comparison only if the artifact
+   returns.
 3. **Sky — ER-01:** capture the band present/absent and compare applied state on
    neighboring lines. Find the first difference that corresponds to the band.
 4. **Horizon — ER-07:** first confirm a difference from the reference; measure
@@ -492,16 +575,18 @@ inspection, and visual test separately; one does not replace the others.
 ### 7. Resumption point
 
 The next technical action is to implement and verify the short capture with
-synchronized images and telemetry, starting with ER-03. Before that, confirm
-whether the user prefers to start with another ID and follow the current
-authorization/instructions for editing, building, and copying the EXE. This
-documentation update does not automatically perform or authorize those future
-steps.
+synchronized images and telemetry for an open issue. ER-03 is resolved in the
+tested title-screen scenario; resume its investigation only if the artifact
+returns. Follow the current authorization/instructions for editing, building,
+and copying the EXE. This documentation update does not automatically perform
+or authorize those future steps.
 
 ## History
 
 | Date | Record |
 | --- | --- |
+| October 16, 2026 | ER-05 resolved in the tested scenario: the user repeated text-box openings several times and confirmed that the defect no longer occurs after the completed-field HDMA source-history fix. Game build and five PPU regression tests passed; deployed EXE SHA-256 `8B4E074FF8E8C5B72EBACDDD004C78BDA9CB42365139EAB8BA9DB08946A3BAFD`. Post-fix visual confirmation is user-reported, without a new capture. |
+| October 15, 2026 | ER-03 resolved in the tested title-screen scenario after moving HDMA processing before scanline rendering and removing separate first-line HDMA priming; user confirmed the fix. Framework commit `cc8c0ae`, pinned by project commit `46fc4fa`. ER-05 remained open. |
 | October 15, 2026 | ER-06 recorded as resolved in the tested scenario, with its cause and before/after captures. ER-05 was initially prioritized for horizontal movement measurements; those measurements are now tracked as ER-04, while ER-05 is reserved for the opening text box. |
 | October 15, 2026 | ER-05 instrumentation built and deployed to `G:\x2`; runtime capture and analysis pending. |
 | October 15, 2026 | Issue scopes clarified: ER-04 is horizontal movement of interactive objects; ER-05 is the opening text box; the title-screen horizon line formerly labeled ER-04 is now ER-07. Earlier capture manifests and history retain their original IDs. |

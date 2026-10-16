@@ -28,10 +28,27 @@ static FILE *rc_fopen(const char *path, const char *mode) {
 
 #define RC_FRAMES 25u
 #define RC_TIMED_FRAMES 360u
+#define RC_TIMED_ER05_FRAMES 620u
 #define RC_TIMED_PREP_MS 5000u
 #define RC_TIMED_CAPTURE_MS 2000u
+#define RC_TIMED_ER05_CAPTURE_MS 10000u
 #define RC_EVENTS 8192u
+#define RC_DMA_EVENTS 512u
 #define RC_WIDTH 800u
+#define RC_INPUT_KEYS 32u
+typedef struct { uint64_t counter; unsigned pressed; } RcInputKey;
+extern void (*g_host_r_key_observer)(int pressed, uint64_t counter);
+static RcInputKey rc_pending_r[RC_INPUT_KEYS];
+static unsigned rc_pending_r_count, rc_pending_r_lost;
+static unsigned rc_input_previous[2], rc_input_previous_valid;
+static uint64_t rc_input_previous_counter;
+/* Main-thread only. Bounded metadata; no input injection or global key hook. */
+static void rc_input_r(int pressed, uint64_t counter) {
+    if (rc_pending_r_count < RC_INPUT_KEYS) {
+        rc_pending_r[rc_pending_r_count].counter = counter;
+        rc_pending_r[rc_pending_r_count++].pressed = !!pressed;
+    } else rc_pending_r_lost++;
+}
 typedef struct {
     uint64_t cpu, beam;
     unsigned v, h, line, phase, source, reg, value, boundary;
@@ -42,13 +59,20 @@ typedef struct {
     unsigned flat_x, flat_len, flat_color_hash, black_x, black_len;
 } RcBoxRow;
 typedef struct {
-    unsigned valid, pitch, width, hash, nonblack, journal, dropped, cursor, completed;
+    unsigned valid, pitch, width, hash, nonblack, journal, dropped, cursor, completed, renderer;
     uint64_t cpu, beam, gsu_clock, instructions;
     unsigned v, h, sfr, irq;
     uint8_t regs[PPU_SAVESTATE_REGS_SIZE];
     DmaChannel channels[8]; /* exported as metadata only */
+    uint8_t hdma_pending_init;
     RcBoxRow box;
 } RcLine;
+typedef struct {
+    uint64_t cpu, beam;
+    unsigned v, h, line, phase, kind, address, value, channel;
+    unsigned active_mask, pending_init;
+    DmaChannel state;
+} RcDmaEvent;
 #define RC_PROBES 12u
 typedef struct {
     unsigned stage, v, h;
@@ -77,8 +101,10 @@ typedef struct {
     RcObjPhase obj[2]; /* boundary_before and render_begin_after */
     unsigned obj_lost;
     unsigned id, events, lost, invalid_rows, dma_lost, dma_count, jobs;
+    unsigned dma_events, dma_event_lost;
     unsigned box_bulk[4][5][2]; /* port, source (4=unknown), CPU/draw */
     RcEvent event[RC_EVENTS];
+    RcDmaEvent dma_event[RC_DMA_EVENTS];
     RcLine line[224];
     uint8_t rgb[224 * RC_WIDTH * 3];
     PpuDmaInfo dma[512];
@@ -86,12 +112,39 @@ typedef struct {
     uint64_t dma_begin;
     uint32_t memory_hash[2][18];
     uint64_t host_begin, host_end;
+    uint64_t input_counter, input_previous_counter;
+    unsigned pads[2], pads_previous[2], input_previous_valid;
+    unsigned r_count, r_lost;
+    RcInputKey r_key[RC_INPUT_KEYS];
 } RcFrame;
 static RcFrame *rc_ring, *rc_current;
+static void rc_input_sample(void) {
+    unsigned p, pads[2];
+    uint64_t now = SDL_GetPerformanceCounter();
+    pads[0] = g_snes->input1_currentState & 0xfff;
+    pads[1] = g_snes->input2_currentState & 0xfff;
+    if (rc_current) {
+        rc_current->input_counter = now;
+        rc_current->input_previous_counter = rc_input_previous_counter;
+        rc_current->input_previous_valid = rc_input_previous_valid;
+        for (p=0;p<2;p++) {
+            rc_current->pads[p] = pads[p];
+            rc_current->pads_previous[p] = rc_input_previous[p];
+        }
+        rc_current->r_count = rc_pending_r_count;
+        rc_current->r_lost = rc_pending_r_lost;
+        memcpy(rc_current->r_key, rc_pending_r, rc_pending_r_count*sizeof(RcInputKey));
+    }
+    for (p=0;p<2;p++) rc_input_previous[p] = pads[p];
+    rc_input_previous_counter = now;
+    rc_input_previous_valid = 1;
+    rc_pending_r_count = rc_pending_r_lost = 0;
+}
 static unsigned rc_initialized, rc_mark, rc_schedule, rc_done, rc_resets, rc_armed_frame;
 static const char *rc_dir;
 static char rc_attached_dir[1024];
-static unsigned rc_timed, rc_timed_prep_ms, rc_capacity = RC_FRAMES, rc_timed_used;
+static unsigned rc_timed, rc_timed_prep_ms, rc_timed_capture_ms = RC_TIMED_CAPTURE_MS;
+static unsigned rc_timed_long_er05, rc_capacity = RC_FRAMES, rc_timed_used;
 static SDL_atomic_t rc_timed_stop, rc_timed_completed, rc_timed_reset;
 static SDL_atomic_t rc_timed_writer_done;
 static uint64_t rc_deadline_counter;
@@ -130,8 +183,18 @@ static const char *rc_attach_request(void) {
     if (!fgets(rc_attached_dir, sizeof(rc_attached_dir), request)) rc_attached_dir[0] = 0;
     { char mode[32];
       if (fgets(mode, sizeof(mode), request)) {
-          if(!strncmp(mode,"timed2prep5\n",12)) {rc_timed=1;rc_timed_prep_ms=RC_TIMED_PREP_MS;}
-          else if(!strncmp(mode,"timed5\n",7)) {rc_timed=1;rc_timed_prep_ms=0;}
+          if(!strncmp(mode,"timed2prep5cap10\n",17)) {
+              rc_timed=1; rc_timed_prep_ms=RC_TIMED_PREP_MS;
+              rc_timed_capture_ms=RC_TIMED_ER05_CAPTURE_MS; rc_timed_long_er05=1;
+          }
+          else if(!strncmp(mode,"timed2prep5\n",12)) {
+              rc_timed=1; rc_timed_prep_ms=RC_TIMED_PREP_MS;
+              rc_timed_capture_ms=RC_TIMED_CAPTURE_MS; rc_timed_long_er05=0;
+          }
+          else if(!strncmp(mode,"timed5\n",7)) {
+              rc_timed=1; rc_timed_prep_ms=0;
+              rc_timed_capture_ms=RC_TIMED_CAPTURE_MS; rc_timed_long_er05=0;
+          }
       } }
     rc_box_enabled=rc_box_x=rc_box_y=rc_box_w=rc_box_h=0;
     { char roi[96]; unsigned x,y,w,h;
@@ -225,6 +288,41 @@ static void rc_probe(unsigned stage) {
         if(stage==1 || stage==4) rc_obj_phase(stage);
     }
 }
+static unsigned rc_hdma_mask(const Dma *dma) {
+    unsigned i, mask = 0;
+    for (i = 0; i < 8; i++)
+        if (dma->channel[i].hdmaActive) mask |= 1u << i;
+    return mask;
+}
+static void rc_dma_trace(DmaTraceKind kind, const Dma *dma,
+                         uint16_t address, uint8_t value) {
+    unsigned first = 0, last = 0, channel;
+    if (!rc_current || !dma) return;
+    if (kind == kDmaTraceHdmaInitBefore || kind == kDmaTraceHdmaInitAfter) {
+        first = 0; last = 7;
+    } else if (address >= 0x4300 && address < 0x4380) {
+        first = last = (address >> 4) & 7;
+    } else {
+        first = last = 8; /* $420C changes the mask as a whole. */
+    }
+    for (channel = first; channel <= last; channel++) {
+        RcDmaEvent *e;
+        if (rc_current->dma_events == RC_DMA_EVENTS) {
+            rc_current->dma_event_lost++;
+            continue;
+        }
+        e = &rc_current->dma_event[rc_current->dma_events++];
+        e->cpu = g_cpu.master_cycles; e->beam = g_snes->beamMasterLast;
+        e->v = g_snes->vPos; e->h = g_snes->hPos;
+        e->line = (unsigned)(trace_line + 1);
+        e->phase = !strcmp(trace_phase, "draw");
+        e->kind = (unsigned)kind; e->address = address; e->value = value;
+        e->channel = channel;
+        e->active_mask = rc_hdma_mask(dma);
+        e->pending_init = dma_hdma_pending_init_get(dma);
+        if (channel < 8) e->state = dma->channel[channel];
+    }
+}
 static void rc_event(int boundary, uint16_t reg, uint8_t value) {
     RcEvent *e;
     if (!rc_current) return;
@@ -270,8 +368,8 @@ static void rc_begin(void) {
         } else rc_dir = getenv("YI_CAPTURE_DIR");
         if (rc_dir && *rc_dir) {
             rc_initialized = 1;
-            rc_capacity=rc_timed?RC_TIMED_FRAMES:RC_FRAMES;
-            if (sizeof(RcFrame) * rc_capacity > (rc_timed?512u:64u) * 1024u * 1024u) {
+            rc_capacity=rc_timed?(rc_timed_long_er05?RC_TIMED_ER05_FRAMES:RC_TIMED_FRAMES):RC_FRAMES;
+            if (sizeof(RcFrame) * rc_capacity > (rc_timed?(rc_timed_long_er05?768u:512u):64u) * 1024u * 1024u) {
                 fputs("YI capture: exceeds memory budget\n", stderr);
                 rc_status("capture.failed", "Memory budget exceeded\n"); return;
             }
@@ -284,7 +382,10 @@ static void rc_begin(void) {
             rc_schedule = rc_dir == rc_attached_dir ? 0 : trace_number("YI_CAPTURE_AT", 0);
             ppu_set_display_observer(trace_observe);
             ppu_set_raster_probe_observer(rc_probe);
-            rc_status("capture.armed", rc_timed ? (rc_timed_prep_ms ? "yi-render-timed-window-v2 preparation_seconds=5 capture_seconds=2 frame_cap=360 pre=0\n" : "yi-render-timed-v1 seconds=5 frame_cap=360 pre=0\n") : "yi-render-attach-v1 pre=8 post=16 batch_cap=1\n");
+            dma_set_trace_observer(rc_dma_trace);
+            rc_status("capture.armed", rc_timed_long_er05
+                ? "yi-render-input-v1 yi-render-timed-window-v2 yi-render-timed-window-er05-10s-v1 preparation_seconds=5 capture_seconds=10 frame_cap=620 pre=0 memory_budget_mib=768\n"
+                : (rc_timed ? (rc_timed_prep_ms ? "yi-render-timed-window-v2 preparation_seconds=5 capture_seconds=2 frame_cap=360 pre=0\n" : "yi-render-timed-v1 seconds=5 frame_cap=360 pre=0\n") : "yi-render-attach-v1 pre=8 post=16 batch_cap=1\n"));
             fprintf(stderr, "YI capture: armed, %zu bytes, one batch\n", sizeof(RcFrame)*rc_capacity);
         }
     }
@@ -308,7 +409,7 @@ static void rc_begin(void) {
                 }
                 if(rc_timed_prep_ms &&
                    (requested_deadline<requested_start ||
-                    requested_deadline-requested_start!=RC_TIMED_CAPTURE_MS ||
+                    requested_deadline-requested_start!=rc_timed_capture_ms ||
                     requested_start>now+(uint64_t)rc_timed_prep_ms+1000u)) {
                     fclose(signal); rc_status("capture.failed","Invalid timed window\n"); rc_done=1;
                     SDL_AtomicSet(&rc_timed_writer_done,1); return;
@@ -318,8 +419,8 @@ static void rc_begin(void) {
                 deadline_remaining=requested_deadline>now?requested_deadline-now:0;
                 rc_requested_deadline_utc=requested_deadline;
                 if(remaining>RC_TIMED_PREP_MS+1000u) remaining=RC_TIMED_PREP_MS+1000u;
-                if(deadline_remaining>RC_TIMED_PREP_MS+RC_TIMED_CAPTURE_MS+1000u)
-                    deadline_remaining=RC_TIMED_PREP_MS+RC_TIMED_CAPTURE_MS+1000u;
+                if(deadline_remaining>RC_TIMED_PREP_MS+rc_timed_capture_ms+1000u)
+                    deadline_remaining=RC_TIMED_PREP_MS+rc_timed_capture_ms+1000u;
                 counter_now=SDL_GetPerformanceCounter();
                 rc_capture_start_counter=counter_now+remaining*SDL_GetPerformanceFrequency()/1000u;
                 rc_deadline_counter=counter_now+deadline_remaining*SDL_GetPerformanceFrequency()/1000u;
@@ -379,11 +480,13 @@ static void rc_row(const Ppu *p, unsigned line) {
     SuperFx *fx;
     if (!rc_current || !line || line > 224) return;
     r = &rc_current->line[line-1];
+    r->renderer = (p->renderFlags & kPpuRenderFlags_NewRenderer) != 0;
     r->cpu = g_cpu.master_cycles; r->beam = g_snes->beamMasterLast;
     r->v = g_snes->vPos; r->h = g_snes->hPos;
     r->pitch = p->renderPitch; r->width = width;
     memcpy(r->regs, &p->inidisp, sizeof(r->regs));
     memcpy(r->channels, g_snes->dma->channel, sizeof(r->channels));
+    r->hdma_pending_init = dma_hdma_pending_init_get(g_snes->dma);
     ppu_rasterStats(&r->journal, &r->dropped, &r->cursor, &r->completed);
     fx = g_snes->cart ? g_snes->cart->superfx : NULL;
     if (fx) { r->gsu_clock = fx->master_clock; r->instructions = fx->instruction_count;
@@ -423,7 +526,14 @@ static int SDLCALL rc_flush(void *unused) {
     fputs("# yi-render-raster-probe-v1 cap=12 states=INIDISP,TM,TS,CGADSUB,CGWSEL stages=1:boundary_before,2:boundary_after,3:render_begin_before,4:render_begin_after,5:render_end_before,6:render_end_after,7:cpu_begin,8:cpu_end physical_slots=0,1 recording=current completed=current^1_when_have_completed\n", f);
     fputs("# counters=port-call; field=V225-journal-not-independent-ID; presentation=unavailable; beam during draw is parked; line=after-runLine-before-HDMA; clocks=master\n", f);
     fputs("# event: frame cpu beam V H drawLine phase(0cpu/1draw) source boundary reg value(256=redacted)\n", f);
-    fputs("# row: frame y valid width pitch cpu beam V H hashBGR nonblack journal dropped cursor completed gsuClock instructions SFR IRQ regs64\n", f);
+    fputs("# yi-render-dma-hdma-v1 events=guest_writes_and_hdma_init_before_after channel_state=metadata_only pending_init=global_mask line=0_based_cpu_minus1\n", f);
+    fputs("# dma_event: frame cpu beam V H drawLine phase kind address value channel active_mask pending_init aBank aAdr bAdr size mode indirect indBank tableAdr repCount doTransfer terminated dmaActive fixed decrement fromB offIndex\n", f);
+    fputs("# hdma_sample: frame y channel hdmaActive terminated tableAdr repCount doTransfer indirect bAdr mode size aBank aAdr indBank dmaActive fixed decrement fromB unusedBit offIndex pending_init\n", f);
+    fputs("# yi-render-ab-v1 hotkey=R row_renderer=0:legacy,1:new\n", f);
+    fprintf(f,"# yi-render-input-v1 frequency=%llu clock=SDL_GetPerformanceCounter phase=before_guest same_frame_id_as_native r_cap=%u initial_R_state=unknown\n",(unsigned long long)SDL_GetPerformanceFrequency(),RC_INPUT_KEYS);
+    fputs("# pad: frame slot counter previous_counter previous_valid mask pressed released A_down A_up; hex runner bits B=001 Y=002 Select=004 Start=008 Up=010 Down=020 Left=040 Right=080 A=100 X=200 L=400 SNES_R=800; edges=sampled_not_physical_time\n",f);
+    fputs("# keyboard_r: next_guest_frame dequeue_counter pressed; repeats_preserved not_SNES_R; r_summary: frame count lost; actual_renderer_in_row\n",f);
+    fputs("# row: frame y valid width pitch cpu beam V H hashBGR nonblack journal dropped cursor completed gsuClock instructions SFR IRQ regs64 renderer\n", f);
     fputs("# regs64 layout=local Ppu.inidisp..cgwsel; offsets follow\n", f);
     fprintf(f,"# yi-render-box-v1 enabled=%u requested_roi=%u,%u,%u,%u max_rows=224 per_row_bytes=%zu coords=native_zero_based first_last_empty=800 run_tie=leftmost hash=FNV1a_RGB color_hash=FNV1a_RGB3 bulk_ports=counts_by_source_phase_when_enabled heuristic_not_object_tracking\n",rc_box_enabled,rc_box_x,rc_box_y,rc_box_w,rc_box_h,sizeof(RcBoxRow));
     fprintf(f,"# yi-render-motion-v1 enabled=%u probe_cap=%u obj_phases=2 slots_per_phase=128 obj_bytes_per_frame=%zu signature=FNV1a_attr_and_size_no_coordinates hashes=FNV1a_raw_internal_bytes_no_payload boundary_serial=observer_stage2_notifications coords=SNES_signed_x_unsigned_y_before_widescreen size=square_renderer_model not_visibility_or_object_identity\n",rc_box_enabled,RC_PROBES,sizeof(ring[0].obj));
@@ -441,6 +551,33 @@ static int SDLCALL rc_flush(void *unused) {
         b=rc_timed?&ring[slot]:&ring[(id-1)%RC_FRAMES];
         if (b->id != id) { fprintf(f,"missing\t%u\n",id); continue; }
         fprintf(f,"frame\t%u\tevent_lost=%u\tinvalid_rows=%u\tdma_lost=%u\tjobs_recent=%u\n",id,b->lost,b->invalid_rows,b->dma_lost,b->jobs);
+        for(i=0;i<2;i++) {
+            unsigned down=b->input_previous_valid?(b->pads[i]&~b->pads_previous[i]):0;
+            unsigned up=b->input_previous_valid?(b->pads_previous[i]&~b->pads[i]):0;
+            fprintf(f,"pad\t%u\t%u\t%llu\t%llu\t%u\t%03X\t%03X\t%03X\t%u\t%u\n",id,i,
+                (unsigned long long)b->input_counter,(unsigned long long)b->input_previous_counter,
+                b->input_previous_valid,b->pads[i],down,up,!!(down&0x100),!!(up&0x100));
+        }
+        fprintf(f,"r_summary\t%u\t%u\t%u\n",id,b->r_count,b->r_lost);
+        for(i=0;i<b->r_count;i++) fprintf(f,"keyboard_r\t%u\t%llu\t%u\n",id,(unsigned long long)b->r_key[i].counter,b->r_key[i].pressed);
+        fprintf(f,"dma_event_summary\t%u\tcount=%u\tlost=%u\n",id,b->dma_events,b->dma_event_lost);
+        for(i=0;i<b->dma_events;i++) {
+            RcDmaEvent *e=&b->dma_event[i];
+            const char *kind=e->kind==kDmaTraceRegisterWrite?"register":
+                e->kind==kDmaTraceHdmaInitBefore?"hdma_init_before":"hdma_init_after";
+            DmaChannel *d=&e->state;
+            fprintf(f,"dma_event\t%u\t%llu\t%llu\t%u\t%u\t%d\t%u\t%s\t%04X\t%02X\t%u\t%02X\t%02X",
+                id,(unsigned long long)e->cpu,(unsigned long long)e->beam,e->v,e->h,
+                (int)e->line-1,e->phase,kind,e->address,e->value,e->channel,
+                e->active_mask,e->pending_init);
+            if(e->channel<8)
+                fprintf(f,"\t%02X\t%04X\t%02X\t%04X\t%u\t%u\t%u\t%u\t%u\t%u\t%u\t%u\t%u\t%u\t%u",
+                    d->aBank,d->aAdr,d->bAdr,d->size,d->mode,d->indirect,
+                    d->indBank,d->tableAdr,d->repCount,d->doTransfer,d->terminated,
+                    d->dmaActive,d->fixed,d->decrement,d->fromB);
+            else fputs("\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-",f);
+            fprintf(f,"\t%u\n",e->channel<8?d->offIndex:0u);
+        }
         if(rc_box_enabled) {
             static const unsigned ports[4]={0x2104,0x2118,0x2119,0x2122};
             unsigned port,source,phase;
@@ -484,7 +621,8 @@ static int SDLCALL rc_flush(void *unused) {
             fprintf(f,"row\t%u\t%u\t%u\t%u\t%u\t%llu\t%llu\t%u\t%u\t%08X\t%u\t%u\t%u\t%u\t%u\t%llu\t%llu\t%04X\t%u\t",id,y,r->valid,r->width,r->pitch,
                 (unsigned long long)r->cpu,(unsigned long long)r->beam,r->v,r->h,r->hash,r->nonblack,r->journal,r->dropped,r->cursor,r->completed,
                 (unsigned long long)r->gsu_clock,(unsigned long long)r->instructions,r->sfr,r->irq);
-            for(i=0;i<sizeof(r->regs);i++) fprintf(f,"%02X",r->regs[i]); fputc('\n',f);
+            for(i=0;i<sizeof(r->regs);i++) fprintf(f,"%02X",r->regs[i]);
+            fprintf(f,"\t%u\n",r->renderer);
             if(rc_box_enabled && y>=rc_box_y && y-rc_box_y<rc_box_h) {
                 RcBoxRow *q=&r->box;
                 const uint8_t *s=r->regs;
@@ -500,7 +638,7 @@ static int SDLCALL rc_flush(void *unused) {
 #undef RC_REG_OFF
             }
             for(i=0;i<8;i++) { DmaChannel *d=&r->channels[i];
-                fprintf(f,"hdma_sample\t%u\t%u\t%u\t%u\t%u\t%04X\t%u\t%u\t%u\t%02X\t%u\t%04X\n",id,y,i,d->hdmaActive,d->terminated,d->tableAdr,d->repCount,d->doTransfer,d->indirect,d->bAdr,d->mode,d->size); }
+                fprintf(f,"hdma_sample\t%u\t%u\t%u\t%u\t%u\t%04X\t%u\t%u\t%u\t%02X\t%u\t%04X\t%02X\t%04X\t%02X\t%u\t%u\t%u\t%u\t%u\t%u\t%u\n",id,y,i,(unsigned)d->hdmaActive,(unsigned)d->terminated,d->tableAdr,d->repCount,(unsigned)d->doTransfer,(unsigned)d->indirect,d->bAdr,d->mode,d->size,d->aBank,d->aAdr,d->indBank,(unsigned)d->dmaActive,(unsigned)d->fixed,(unsigned)d->decrement,(unsigned)d->fromB,(unsigned)d->unusedBit,d->offIndex,b->line[y].hdma_pending_init); }
         }
         for(i=0;i<b->dma_count;i++) { PpuDmaInfo *d=&b->dma[i];
             fprintf(f,"dma\t%u\tframework_frame=%d\tline=%d\tphase=%u\tch=%u\tfromB=%u\tsrc=%02X:%04X\tb=%02X\tdest=%04X\tbytes=%u\n",id,d->frame,d->line,d->phase,d->channel,d->fromB,d->aBank,d->aAdr,d->bAdr,d->dest,d->size); }

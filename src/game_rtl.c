@@ -95,6 +95,7 @@ static void trace_state(const char *kind, int row) {
     } else fputs("NA\tNA\n", trace_file);
 }
 static void trace_begin(void) {
+    g_host_r_key_observer = rc_input_r;
     if (!trace_initialized) {
         const char *path = getenv("YI_TRACE_FILE");
         trace_initialized = 1;
@@ -124,6 +125,7 @@ static void trace_begin(void) {
     trace_events = trace_lost = 0;
     trace_phase = "cpu"; trace_line = -1;
     rc_begin();
+    rc_input_sample();
     trace_state("begin", -1);
 }
 
@@ -175,6 +177,8 @@ const RtlGameInfo kGameInfo = {
 
 void GameSessionReset(void)
 {
+    rc_input_previous_valid = 0;
+    rc_pending_r_count = rc_pending_r_lost = 0;
     if (rc_ring) {
         fputs("YI capture: aborted by session reset; restart process for a new capture\n", stderr);
         if(rc_timed) {
