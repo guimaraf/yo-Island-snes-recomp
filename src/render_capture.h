@@ -66,6 +66,12 @@ typedef struct {
     DmaChannel channels[8]; /* exported as metadata only */
     uint8_t hdma_pending_init;
     RcBoxRow box;
+    PpuRasterMemoryProbe memory;
+    uint32_t consumed_vram_hash[16];
+    unsigned vram_external, vram_writes, vram_pointer, vram_increment, vram_high, vram_remap;
+    unsigned bg3_sample_valid, bg3_pixels[4], bg3_priority_pixels;
+    uint32_t bg3_fetch_hash;
+
 } RcLine;
 typedef struct {
     uint64_t cpu, beam;
@@ -152,6 +158,7 @@ static uint64_t rc_capture_start_counter;
 static uint64_t rc_capture_start_utc_ms;
 static uint64_t rc_requested_deadline_utc;
 static SDL_atomic_t rc_frame_cap_drops;
+static int rc_requested_renderer = -1; /* host-only capture override; no guest input */
 static unsigned rc_box_enabled, rc_box_x, rc_box_y, rc_box_w, rc_box_h;
 static uint64_t rc_boundary_serial; /* observer notifications, not guest state */
 static int SDLCALL rc_timed_writer(void *unused);
@@ -196,12 +203,15 @@ static const char *rc_attach_request(void) {
               rc_timed_capture_ms=RC_TIMED_CAPTURE_MS; rc_timed_long_er05=0;
           }
       } }
+    rc_requested_renderer=-1;
     rc_box_enabled=rc_box_x=rc_box_y=rc_box_w=rc_box_h=0;
-    { char roi[96]; unsigned x,y,w,h;
+    { char roi[96]={0}; unsigned x,y,w,h; int renderer;
       if (fgets(roi,sizeof(roi),request) &&
           sscanf(roi,"box %u %u %u %u",&x,&y,&w,&h)==4 &&
           x<RC_WIDTH && y<224 && w>0 && w<=RC_WIDTH-x && h>0 && h<=224-y) {
           rc_box_enabled=1; rc_box_x=x; rc_box_y=y; rc_box_w=w; rc_box_h=h;
+      } else if (sscanf(roi,"renderer %d",&renderer)==1 && (renderer==0 || renderer==1)) {
+          rc_requested_renderer=renderer;
       } }
     fclose(request);
     rc_attached_dir[strcspn(rc_attached_dir, "\r\n")] = 0;
@@ -377,6 +387,11 @@ static void rc_begin(void) {
             if (!rc_ring) { fputs("YI capture: allocation failed\n", stderr);
                 rc_status("capture.failed", "Allocation failed\n");
                 rc_initialized=0; return; }
+            if (rc_requested_renderer==0 && g_ppu->extraLeftRight) {
+                rc_status("capture.failed", "Renderer A requires native width; disable widescreen before arming. No input or configuration was changed.\n");
+                rc_done=1;
+                return;
+            }
             rc_armed_frame = trace_frame;
             /* Attach is explicitly manual even if a stale schedule was inherited. */
             rc_schedule = rc_dir == rc_attached_dir ? 0 : trace_number("YI_CAPTURE_AT", 0);
@@ -384,7 +399,7 @@ static void rc_begin(void) {
             ppu_set_raster_probe_observer(rc_probe);
             dma_set_trace_observer(rc_dma_trace);
             rc_status("capture.armed", rc_timed_long_er05
-                ? "yi-render-input-v1 yi-render-timed-window-v2 yi-render-timed-window-er05-10s-v1 preparation_seconds=5 capture_seconds=10 frame_cap=620 pre=0 memory_budget_mib=768\n"
+                ? "yi-er07-bg3vofs-defer-v1 yi-render-vram-consumed-v1 yi-render-select-v1 yi-render-input-v1 yi-render-timed-window-v2 yi-render-timed-window-er05-10s-v1 preparation_seconds=5 capture_seconds=10 frame_cap=620 pre=0 memory_budget_mib=768\n"
                 : (rc_timed ? (rc_timed_prep_ms ? "yi-render-timed-window-v2 preparation_seconds=5 capture_seconds=2 frame_cap=360 pre=0\n" : "yi-render-timed-v1 seconds=5 frame_cap=360 pre=0\n") : "yi-render-attach-v1 pre=8 post=16 batch_cap=1\n"));
             fprintf(stderr, "YI capture: armed, %zu bytes, one batch\n", sizeof(RcFrame)*rc_capacity);
         }
@@ -474,12 +489,65 @@ static void rc_box_measure(RcBoxRow *b, const uint8_t *rgb, unsigned width) {
         }
     }
 }
+/* Passive native-width BG3 sampler. Mode 1, no mosaic; before windows,
+ * priority arbitration and color math. Counts/hashes only, never tile bytes. */
+static void rc_bg3_sample(const Ppu *p, unsigned line, RcLine *r) {
+    const uint16_t *vram=PpuRenderVram(p);
+    unsigned x, big=!!PPU_bigTiles(p,2), shift=big?4:3;
+    unsigned sy=line+p->vScroll[2], mask=big?15:7;
+    if(PPU_mode(p)!=1 || (PPU_mosaicSize(p)>1 && PPU_mosaicEnabled(p,2))) return;
+    r->bg3_sample_valid=1; r->bg3_fetch_hash=2166136261u;
+    for(x=0;x<256;x++) {
+        unsigned sx=x+p->hScroll[2], px=sx&mask, py=sy&mask;
+        unsigned map=PPU_bgTilemapAdr(p,2)+(((sy>>shift)&31)<<5)+((sx>>shift)&31);
+        unsigned tile,character,address,planes,pixel,k;
+        if(((sx>>(shift+5))&1) && PPU_bgTilemapWider(p,2)) map+=0x400;
+        if(((sy>>(shift+5))&1) && PPU_bgTilemapHigher(p,2)) map+=PPU_bgTilemapWider(p,2)?0x800:0x400;
+        map&=0x7fff; tile=vram[map];
+        if(tile&0x4000) px=mask-px;
+        if(tile&0x8000) py=mask-py;
+        character=((tile&1023)+(px>>3)+((py>>3)<<4))&1023;
+        address=(PPU_bgTileAdr(p,2)+character*8+(py&7))&0x7fff;
+        planes=vram[address];
+        pixel=((planes>>(7-(px&7)))&1)|(((planes>>(15-(px&7)))&1)<<1);
+        r->bg3_pixels[pixel]++;
+        if(pixel && (tile&0x2000)) r->bg3_priority_pixels++;
+        /* FNV over sampled map/character addresses and words, no payload output. */
+        { unsigned values[4]={map,tile,address,planes};
+          for(k=0;k<4;k++) {
+            r->bg3_fetch_hash=(r->bg3_fetch_hash^(values[k]&255))*16777619u;
+            r->bg3_fetch_hash=(r->bg3_fetch_hash^(values[k]>>8))*16777619u;
+          }
+        }
+    }
+}
+static void rc_consumed_memory(const Ppu *p, unsigned line, RcLine *r) {
+    const uint16_t *vram=PpuRenderVram(p);
+    const RcLine *prev=line>1?&rc_current->line[line-2]:NULL;
+    unsigned region;
+    ppu_rasterMemoryProbe(&r->memory);
+    r->vram_external=p->renderVram!=NULL;
+    r->vram_writes=p->vramWriteCount; r->vram_pointer=p->vramPointer;
+    r->vram_increment=p->vramIncrement; r->vram_high=p->vramIncrementOnHigh;
+    r->vram_remap=p->vramRemapMode;
+    /* A field transition and replay cursor invalidate the cache even though
+     * replay does not increment the guest upload counter. External VRAM is
+     * hashed every line because its owner need not update that counter. */
+    if(prev && !r->vram_external && !prev->vram_external &&
+       prev->memory.consumed_field==r->memory.consumed_field &&
+       prev->memory.memory_next==r->memory.memory_next && prev->vram_writes==r->vram_writes)
+        memcpy(r->consumed_vram_hash,prev->consumed_vram_hash,sizeof(r->consumed_vram_hash));
+    else for(region=0;region<16;region++)
+        r->consumed_vram_hash[region]=rc_hash_bytes((const uint8_t *)vram+region*4096,4096);
+    rc_bg3_sample(p,line,r);
+}
 static void rc_row(const Ppu *p, unsigned line) {
     unsigned x, c, width = 256u + 2u*p->extraLeftRight;
     RcLine *r;
     SuperFx *fx;
     if (!rc_current || !line || line > 224) return;
     r = &rc_current->line[line-1];
+    if(rc_requested_renderer>=0) rc_consumed_memory(p,line,r);
     r->renderer = (p->renderFlags & kPpuRenderFlags_NewRenderer) != 0;
     r->cpu = g_cpu.master_cycles; r->beam = g_snes->beamMasterLast;
     r->v = g_snes->vPos; r->h = g_snes->hPos;
@@ -521,7 +589,7 @@ static int SDLCALL rc_flush(void *unused) {
     FILE *f = rc_open("capture.tsv");
     if (!f) { perror("YI capture.tsv"); rc_status("capture.failed", "Cannot create capture.tsv\n"); if(!rc_timed) free(ring); return 1; }
     fprintf(f, "# yi-render-v3 request_mark=%u first=%u last=%u pre=%u post=%s preparation=%s bytes=%zu event_cap=%u batch_cap=1 resets=%u frame_cap=%u\n",
-        rc_mark, first, last, rc_timed?0:8, rc_timed?"2seconds":"16frames", rc_timed?"5seconds":"none", sizeof(RcFrame)*rc_capacity, RC_EVENTS, rc_resets,rc_capacity);
+        rc_mark, first, last, rc_timed?0:8, rc_timed?(rc_timed_long_er05?"10seconds":"2seconds"):"16frames", rc_timed?"5seconds":"none", sizeof(RcFrame)*rc_capacity, RC_EVENTS, rc_resets,rc_capacity);
     if(rc_timed) fprintf(f,"# timed completed=%u frame_cap_drops=%u capture_start_utc_ms=%llu capture_end_utc_ms=%llu start_counter=%llu end_counter=%llu host_counter_frequency=%llu end=%s incomplete_current_frame=excluded\n",rc_export.count,(unsigned)SDL_AtomicGet(&rc_frame_cap_drops),(unsigned long long)rc_capture_start_utc_ms,(unsigned long long)rc_requested_deadline_utc,(unsigned long long)rc_capture_start_counter,(unsigned long long)rc_deadline_counter,(unsigned long long)SDL_GetPerformanceFrequency(),rc_export.reset?"reset_partial":"monotonic_deadline");
     fputs("# yi-render-raster-probe-v1 cap=12 states=INIDISP,TM,TS,CGADSUB,CGWSEL stages=1:boundary_before,2:boundary_after,3:render_begin_before,4:render_begin_after,5:render_end_before,6:render_end_after,7:cpu_begin,8:cpu_end physical_slots=0,1 recording=current completed=current^1_when_have_completed\n", f);
     fputs("# counters=port-call; field=V225-journal-not-independent-ID; presentation=unavailable; beam during draw is parked; line=after-runLine-before-HDMA; clocks=master\n", f);
@@ -529,6 +597,10 @@ static int SDLCALL rc_flush(void *unused) {
     fputs("# yi-render-dma-hdma-v1 events=guest_writes_and_hdma_init_before_after channel_state=metadata_only pending_init=global_mask line=0_based_cpu_minus1\n", f);
     fputs("# dma_event: frame cpu beam V H drawLine phase kind address value channel active_mask pending_init aBank aAdr bAdr size mode indirect indBank tableAdr repCount doTransfer terminated dmaActive fixed decrement fromB offIndex\n", f);
     fputs("# hdma_sample: frame y channel hdmaActive terminated tableAdr repCount doTransfer indirect bAdr mode size aBank aAdr indBank dmaActive fixed decrement fromB unusedBit offIndex pending_init\n", f);
+    fprintf(f,"# yi-render-vram-consumed-v1 enabled=%u sampling=after_runLine_before_RenderEnd hashes=FNV1a_16_pages_4096bytes bg3=mode1_native256_no_mosaic_before_windows_priority_math pixel0=transparent payload=none\n",rc_requested_renderer>=0);
+    fputs("# consumed_vram: frame y recording_field consumed_field memory_count memory_dropped memory_next hdma_sources_valid external_vram write_count pointer increment increment_on_high remap hash_pages_0_to_15\n",f);
+    fputs("# bg3_sample: frame y valid transparent color1 color2 color3 high_priority_nonzero fetch_hash\n",f);
+    fputs("# yi-er07-bg3vofs-defer-v1 candidate=1 scope=HDMA_BG3VOFS_only latency_lines=1 default_driver_unchanged validation=pending\n",f);
     fputs("# yi-render-ab-v1 hotkey=R row_renderer=0:legacy,1:new\n", f);
     fprintf(f,"# yi-render-input-v1 frequency=%llu clock=SDL_GetPerformanceCounter phase=before_guest same_frame_id_as_native r_cap=%u initial_R_state=unknown\n",(unsigned long long)SDL_GetPerformanceFrequency(),RC_INPUT_KEYS);
     fputs("# pad: frame slot counter previous_counter previous_valid mask pressed released A_down A_up; hex runner bits B=001 Y=002 Select=004 Start=008 Up=010 Down=020 Left=040 Right=080 A=100 X=200 L=400 SNES_R=800; edges=sampled_not_physical_time\n",f);
@@ -623,6 +695,17 @@ static int SDLCALL rc_flush(void *unused) {
                 (unsigned long long)r->gsu_clock,(unsigned long long)r->instructions,r->sfr,r->irq);
             for(i=0;i<sizeof(r->regs);i++) fprintf(f,"%02X",r->regs[i]);
             fprintf(f,"\t%u\n",r->renderer);
+            if(rc_requested_renderer>=0) {
+                PpuRasterMemoryProbe *m=&r->memory;
+                fprintf(f,"consumed_vram\t%u\t%u\t%llu\t%llu\t%u\t%u\t%u\t%u\t%u\t%u\t%u\t%u\t%u\t%u",id,y,
+                    (unsigned long long)m->recording_field,(unsigned long long)m->consumed_field,
+                    m->memory_count,m->memory_dropped,m->memory_next,m->hdma_sources_valid,
+                    r->vram_external,r->vram_writes,r->vram_pointer,r->vram_increment,r->vram_high,r->vram_remap);
+                for(i=0;i<16;i++) fprintf(f,"\t%08X",r->consumed_vram_hash[i]);
+                fputc('\n',f);
+                fprintf(f,"bg3_sample\t%u\t%u\t%u\t%u\t%u\t%u\t%u\t%u\t%08X\n",id,y,r->bg3_sample_valid,
+                    r->bg3_pixels[0],r->bg3_pixels[1],r->bg3_pixels[2],r->bg3_pixels[3],r->bg3_priority_pixels,r->bg3_fetch_hash);
+            }
             if(rc_box_enabled && y>=rc_box_y && y-rc_box_y<rc_box_h) {
                 RcBoxRow *q=&r->box;
                 const uint8_t *s=r->regs;

@@ -151,13 +151,25 @@ static void trace_drawn_line(const Ppu *ppu, unsigned line, void *context)
 
 void GameDrawPpuFrame(void)
 {
+    /* Explicit capture selection affects host rasterization only. Restore the
+     * caller's flags after drawing; never change config, inputs or guest state. */
+    const uint32_t saved_render_flags = g_ppu->renderFlags;
+    if (rc_initialized && !rc_done && rc_requested_renderer>=0 &&
+        !(rc_timed && SDL_AtomicGet(&rc_timed_writer_done))) {
+        g_ppu->renderFlags = (saved_render_flags & ~kPpuRenderFlags_NewRenderer) |
+            (rc_requested_renderer ? kPpuRenderFlags_NewRenderer : 0);
+    }
     rc_probe(8);
     trace_state("cpu_end", -1);
     trace_phase = "draw";
     trace_line = 0;
-    snes_beam_frame_driver_draw_ppu_frame_observed(
-        (trace_active() || rc_current) ? trace_drawn_line : NULL, NULL);
+    /* ER-07 candidate: phase only HDMA's BG3 vertical result. Leave INIDISP,
+     * windows, color math, journal ordering and completed-field sources intact.
+     * Validation is required in both scenes and ER-03/ER-05 regressions. */
+    snes_beam_frame_driver_draw_ppu_frame_observed_deferred_vofs(
+        (trace_active() || rc_current) ? trace_drawn_line : NULL, NULL, 1u<<2);
     trace_state("draw_end", -1);
+    g_ppu->renderFlags = saved_render_flags;
     rc_end();
     if (trace_active()) fflush(trace_file);
     if (trace_file && trace_frame >= trace_end) {
