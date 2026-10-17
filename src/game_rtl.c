@@ -3,6 +3,10 @@
 
 #include "game_rtl.h"
 
+#ifndef YI_DELAY_BG2_TEST
+#define YI_DELAY_BG2_TEST 0
+#endif
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -163,11 +167,12 @@ void GameDrawPpuFrame(void)
     trace_state("cpu_end", -1);
     trace_phase = "draw";
     trace_line = 0;
-    /* ER-07 candidate: phase only HDMA's BG3 vertical result. Leave INIDISP,
-     * windows, color math, journal ordering and completed-field sources intact.
-     * Validation is required in both scenes and ER-03/ER-05 regressions. */
+    /* Preserve the validated ER-10 BG3 phase. The dedicated test build keeps
+     * BG2 enabled throughout play; normal builds require an armed experiment. */
+    rc_draw_deferred_vofs_mask = (1u<<2) |
+        ((YI_DELAY_BG2_TEST || rc_er07_bg2_phase_active()) ? (1u<<1) : 0);
     snes_beam_frame_driver_draw_ppu_frame_observed_deferred_vofs(
-        (trace_active() || rc_current) ? trace_drawn_line : NULL, NULL, 1u<<2);
+        (trace_active() || rc_current) ? trace_drawn_line : NULL, NULL, rc_draw_deferred_vofs_mask);
     trace_state("draw_end", -1);
     g_ppu->renderFlags = saved_render_flags;
     rc_end();

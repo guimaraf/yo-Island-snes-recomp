@@ -22,8 +22,9 @@ necessarily the video's chronological order.
   interval, not all 80 seconds.
 - ER-01 through ER-06 and ER-09 are resolved in the scenarios the user tested.
   ER-09 was confirmed resolved on October 17, 2026 after the Mode 2 offset fix.
-  Two reports remain open: ER-07, sprite-side corruption during the Boss 1-4
-  zoom; and ER-08, a line above the text box in the Bonus stage. The previously resolved
+  ER-07 was confirmed resolved in the complete Boss 1-4 fight on October 17,
+  2026 using the continuously enabled `DelayBG2-test` build. ER-08, a line
+  above the text box in the Bonus stage, remains open. The previously resolved
   gameplay background issue and title-screen horizon were renumbered ER-10 and
   ER-11 to keep these new IDs unique.
 - The user also tested the emulator named **Bnes** for comparison. No version or
@@ -47,7 +48,7 @@ necessarily the video's chronological order.
 | ER-04 | Interactive objects (including stationary enemies and the pushable ball) shift horizontally relative to the scenery | User-validated World 1-2 block and World 1 ball scenarios after raster-history fixes | Resolved in the tested scenarios on October 15, 2026; commits `7264416`, `97111a4` |
 | ER-05 | Text box appears too early or opens in the wrong sequence | Continuous capture with per-frame input; user repeated text-box openings after the HDMA source-history fix and confirmed the defect no longer occurs | Resolved in the tested scenario on October 16, 2026 |
 | ER-06 | Flicker when returning to the level selector after completing a level | Before/after captures and user repetition of the trigger | Resolved in the tested scenario on October 15, 2026; commit `493f08b` |
-| ER-07 | Sprite corruption along the sides during the zoom in the Boss 1-4 scene; rendering error outside the boss | User report; no captures or exact zoom sequence supplied yet | Open; severity and reproduction details pending |
+| ER-07 | Extra lines outside the Boss 1-4 during growth, combat and shrinking | Per-line captures and user confirmation after playing the complete fight with continuous BG2 VOFS delay | Resolved in the tested Boss 1-4 fight on October 17, 2026, in `DelayBG2-test`; normal-build default remains unchanged |
 | ER-08 | Line above the text box in the Bonus stage | User report; no capture or exact stage/message supplied yet | Open; reproduction details pending |
 | ER-09 | Stage 1-7 background and walkable terrain render at incorrect positions | Images 14–15; before/after captures and same-run B-to-A comparison; user confirms normal progression after the Mode 2 offset fix | Resolved in the tested Stage 1-7 scenario on October 17, 2026 |
 | ER-10 | Background corruption while moving the World 1-3 secret-passage weight bar and while a door descends in the first castle | Images 8–12 and user-confirmed post-fix captures; originally tracked as ER-07 | Resolved in both tested scenarios on October 16, 2026; one-line BG3 HDMA VOFS timing correction |
@@ -450,14 +451,101 @@ as comparison controls; do not conclude that every message, stage, or pause
 state has been validated. ER-05's visual scope is only the text-box transitions
 in the opening sequence observed by the user.
 
-## ER-07 — sprite-side corruption during the Boss 1-4 zoom
+## ER-07 — sprite-side corruption during the Boss 1-4 zoom — resolved in the tested fight
+
+**Resolution confirmed on October 17, 2026:** the user played the complete
+Boss 1-4 fight using `G:\x2\Yoshi's Island recomp.DelayBG2-test.exe` and
+reported no corrupted lines throughout the fight. This closes ER-07 in that
+tested scenario. This final validation is a user playtest report, not a new
+recording of the entire fight or a frame-matched hardware/reference comparison.
+
+**Adjustment:** `src/game_rtl.c` passes deferred-VOFS mask `06` to
+`snes_beam_frame_driver_draw_ppu_frame_observed_deferred_vofs`: BG2 (`02`)
+is added to the existing BG3 (`04`) policy previously validated for ER-10.
+When HDMA writes BG2VOFS, rendering consumes the preceding vertical-scroll
+value for that line; the new value is available to the following line.
+The existing driver restores guest state after reconstruction. BG2 horizontal
+scroll, GSU execution, controls and the previous ER-03/ER-04/ER-05 corrections
+were not changed by this adjustment. The evidence supports this BG2 vertical
+consumption-phase correction for the reported boss; it does not establish a
+universal HDMA timing rule for every game effect.
+
+**Evidence:** the horizontal artifact was also reproduced in renderer A,
+so it was not exclusive to renderer B. In the original B capture, frame
+12779/y45 selected source y=511 and drew the external horizontal line. With
+`DelayBG2`, frame 9139 in
+`G:\x2\yoshi-render-ER07-Boss14-Zoom-Padrao-B-DelayBG2-20261017-150256-e28744d3`
+matched the preceding-line BG2 scroll sequence across all 223 comparable
+lines; the transition instead reached source y=512 on y46 and the external
+line disappeared in that comparison. That capture contains 1,201 consecutive
+frames, all in B, with policy `06` throughout. Follow-up folders were preserved:
+
+- `G:\x2\yoshi-render-ER07-Boss14-Acertos-Padrao-B-DelayBG2-20261017-150937-6e083ccb`
+  (1,201 frames, 10330–11530).
+- `G:\x2\yoshi-render-ER07-Boss14-Acertos-Padrao-B-DelayBG2-20261017-152121-53ad4215`
+  (600 frames, 20518–21117).
+
+Both follow-ups recorded renderer B and policy `06` on every line, with no
+missing images or checked video-record losses. They did not contain the
+complete final shrinking sequence. Earlier reports that lines returned after
+capture were clarified by the user: the timed experiment had already stopped.
+The capture-only implementation intentionally reverts at the deadline; those
+out-of-window observations did not test continuous `DelayBG2`. The separately
+reported TAB run was not captured and does not establish a turbo-related cause.
+
+**Validated build and implementation scope:** `CMakeLists.txt` adds
+`YI_DELAY_BG2_TEST`, default `OFF`, with a definition scoped to `src/game_rtl.c`
+and the distinct output name `Yoshi's Island recomp.DelayBG2-test.exe`.
+With the option enabled, BG2 delay stays active throughout execution, without
+any capture request or deadline, using the normally selected renderer.
+Compile/link and deployment hash verification passed. Executable SHA-256:
+`446F68D552A15BB5B7EE72F59C59C4CD3B201515C28364A499AC5BEC9AB8C29D`.
+The build cache was restored to `OFF` afterward; the normal build still uses
+the prior default and only enables BG2 delay during an explicitly armed
+experiment. Resolution is therefore validated in this named build, not yet
+promoted to the normal-build default. The 110 ROM-free synthetic BG2 cases
+passed in A/B; they check addressing, not real hardware HDMA timing.
+The final user playtest did not separately record its effective renderer.
+
+The following material preserves the investigation history. Open/pending
+statements below describe the earlier stage and are superseded by this closure.
 
 **User report:** in the Boss 1-4 scene, a rendering error appears outside the
 boss. When the scene zooms, the sprite becomes corrupted along its sides.
 
-**Evidence and status:** report only. No screenshots, capture sequence,
-renderer identity, exact zoom trigger, or affected sprite identity have been
-provided yet. Cause and scope are undetermined.
+**Evidence and status:** open. Capture
+`G:\x2\yoshi-render-ER07-Boss14-Zoom-Padrao-20261017-130545-4dd3fdaf`
+contains 554 consecutive frames (12739–13292), all 124,096 lines in B/Mode 1,
+with no reported losses or missing images. Sampled images show a thin
+horizontal line outside the boss. In examples 12770/y76, 12779/y45 and
+12839/y48, that line coincides with a BG2VOFS transition selecting source y=511.
+In 12779/y45 the OBJ buffer occupies only x=162–165, while the artifact extends
+well outside those bounds. This narrows the investigation toward BG2/composition;
+it does not prove a timing fix or exclude other causes. No renderer A comparison
+or matched reference was supplied for this effect.
+
+**Additional user context:** the boss starts small and grows after a magic
+spell. During combat, egg hits make it grow further until it stops moving.
+The user also reports black vertical lines at the sides during those hits.
+The term "sprite" describes the visible character, not a technical diagnosis.
+The vertical-line report must be investigated separately from the horizontal
+line already observed; its first defective frame is not identified yet.
+
+**Capture preparation on October 17, 2026:** use
+`scripts/capture-render-er07-boss.ps1` and `scripts/ER07-boss-capture.md` with
+the instrumented `ER07-boss-20s` executable. Its default passive twenty-second window
+starts after five seconds of preparation and must include before/during/after
+the zoom. It preserves the active renderer and adds consumed OAM/CGRAM hashes,
+native OBJ buffer metadata, sprite-evaluation flags and GSU video configuration
+to the existing native images, per-line PPU/VRAM and DMA/HDMA records. These
+measurements do not establish that the affected pixels are OBJ rather than
+background/composition. The twenty-second extension supports separate `Zoom`
+and `Acertos` scenarios, with a ten-second option and bounded frame/memory
+limits. Capture of the vertical-line event and confirmation of cause remain
+pending. No boss rendering correction has been applied.
+The historical `scripts/capture-render-er07.ps1` covers the scenes now tracked
+as ER-10 and must not be used for this boss report. Preserve all earlier fixes
+and each complete capture folder. This preparation does not resolve ER-07.
 
 ## ER-08 — line above the Bonus-stage text box
 
@@ -537,14 +625,15 @@ playtest are separate evidence; neither certifies every stage or effect.
 
 ## Suggested investigation order
 
-1. **ER-07:** record the Boss 1-4 zoom and affected sprite.
+1. **ER-07:** resolved in the complete user-tested Boss 1-4 fight with
+   `DelayBG2-test`; reopen only if the reported lines return with the adjustment active.
 2. **ER-08:** record the Bonus-stage text box and the line above it.
 3. **ER-09:** resolved in the tested Stage 1-7 scenario; reopen only if the
    displaced-terrain artifact returns, preserving the before/after evidence.
 4. **ER-10 and ER-11:** previously resolved in the tested scenarios; reopen
    only if either reported artifact returns.
 
-ER-01 through ER-06 and ER-09 through ER-11 are resolved in the user-tested
+ER-01 through ER-07 and ER-09 through ER-11 are resolved in the user-tested
 scenarios. Reopen a resolved item only if its reported artifact returns, and
 retain the prior captures for comparison.
 
@@ -683,12 +772,12 @@ for passive capture.
 2. **Title screen — ER-03 regression check:** the tested scenario is resolved.
    Repeat the native/presented first-line comparison only if the artifact
    returns.
-3. **Boss 1-4 — ER-07:** capture the zoom and sprite-side corruption when
-   reproducing it.
+3. **Boss 1-4 — ER-07:** resolved in `DelayBG2-test`; capture only if the
+   reported corruption returns with continuous BG2 delay active.
 4. **Bonus stage — ER-08:** capture the text box and the line above it.
 5. **Stage 1-7 — ER-09:** resolved on October 17, 2026; repeat only if the
    displaced-terrain artifact returns.
-6. **Resolved issues ER-01 through ER-06 and ER-09 through ER-11:** repeat a
+6. **Resolved issues ER-01 through ER-07 and ER-09 through ER-11:** repeat a
    tested scenario only if its artifact returns.
 7. **Gameplay observation:** play normally while recording scene and inputs;
    check that blackouts do not return and that input, audio, text boxes, and
@@ -723,15 +812,18 @@ inspection, and visual test separately; one does not replace the others.
 
 ### 7. Resumption point
 
-ER-07 and ER-08 remain open reports from gameplay. ER-09 was resolved in the
-tested Stage 1-7 scenario on October 17, 2026. ER-01 through ER-06 and ER-09
-through ER-11 are resolved in the scenarios the user tested; resume a resolved
-item only if its artifact returns.
+ER-08 remains open and is deferred to a later session at the user's request.
+ER-07 is resolved in the complete Boss 1-4 fight tested with `DelayBG2-test`;
+continuous BG2 delay remains an explicit build option, not the normal default.
+ER-09 was resolved in the tested Stage 1-7 scenario on October 17, 2026.
+ER-01 through ER-07 and ER-09 through ER-11 are resolved in the scenarios the
+user tested; resume a resolved item only if its artifact returns.
 
 ## History
 
 | Date | Record |
 | --- | --- |
+| October 17, 2026 | ER-07 resolved in the complete user-tested Boss 1-4 fight with `Yoshi's Island recomp.DelayBG2-test.exe` (SHA-256 `446F68D552A15BB5B7EE72F59C59C4CD3B201515C28364A499AC5BEC9AB8C29D`). Continuous one-line BG2 HDMA VOFS consumption delay adds BG2 to the preserved BG3 policy (mask `06`). Timed captures validated the active policy and growth improvement; the final complete-fight confirmation is a user report. Previously observed returns happened outside the active capture window. `YI_DELAY_BG2_TEST` defaults to `OFF`, so the validated behavior remains specific to the named test build. Further issue investigations are deferred. |
 | October 17, 2026 | ER-09 resolved in the tested Stage 1-7 scenario after correcting renderer B Mode 2 offset-table row/column selection and vertical offsets. Post-fix capture `G:\x2\yoshi-render-ER09-Placa-Padrao-20261017-104621-232a4556`: 600 consecutive frames (2125–2724), all valid lines in B/Mode 2, no recorded losses or export failures. The user confirms complete disappearance and several additional minutes of progression without noticed problems. Synthetic regressions and Release build passed; see ER-09 for scope, executable hash and preserved evidence. |
 | October 16, 2026 | The user reported three new rendering problems: sprite-side corruption during the Boss 1-4 zoom (ER-07), a line above the Bonus-stage text box (ER-08), and a severely incorrect Stage 1-7 background that prevents progress (ER-09). No new captures or screenshots were supplied. To keep IDs unique, the previously resolved secret-passage/first-castle background issue was renumbered ER-10, and the previously resolved title-screen horizon was renumbered ER-11. Earlier history and capture names retain their original IDs. |
 | October 16, 2026 | ER-07 resolved in both user-tested scenes with the one-line BG3 HDMA VOFS timing correction. The user reports the passage weight-bar and first-castle door corruption disappeared completely. Follow-up captures: `G:\x2\yoshi-render-ER07-Passagem-B-20261016-094631-31dbccd7` (600 consecutive frames) and `G:\x2\yoshi-render-ER07-Castelo-B-20261016-094740-bc639c63` (599 consecutive frames). Renderer B was effective for every valid line; no invalid lines, frame-cap drops, or export I/O failures were found, and visual inspection found no remaining reported corruption. Executable SHA-256 `24F3F765795EF31209DEC25F5CAFBD6DE051D2EA201981BD2F062208CF7DA12E`. The same fix works in both tests, but a common underlying cause is not proven; castle room/door and reference comparison remain undocumented. |

@@ -29,9 +29,11 @@ static FILE *rc_fopen(const char *path, const char *mode) {
 #define RC_FRAMES 25u
 #define RC_TIMED_FRAMES 360u
 #define RC_TIMED_ER05_FRAMES 620u
+#define RC_TIMED_BOSS20_FRAMES 1240u
 #define RC_TIMED_PREP_MS 5000u
 #define RC_TIMED_CAPTURE_MS 2000u
 #define RC_TIMED_ER05_CAPTURE_MS 10000u
+#define RC_TIMED_BOSS20_CAPTURE_MS 20000u
 #define RC_EVENTS 8192u
 #define RC_DMA_EVENTS 512u
 #define RC_WIDTH 800u
@@ -71,6 +73,10 @@ typedef struct {
     unsigned vram_external, vram_writes, vram_pointer, vram_increment, vram_high, vram_remap;
     unsigned bg3_sample_valid, bg3_pixels[4], bg3_priority_pixels;
     uint32_t bg3_fetch_hash;
+    uint32_t obj_oam_hash, obj_high_hash, obj_cgram_hash, obj_buffer_hash;
+    unsigned obj_pixels, obj_first, obj_last, obj_line_has_sprites;
+    unsigned obj_range_over, obj_time_over, obj_render_flags, deferred_vofs_mask;
+    uint8_t gsu_scmr, gsu_scbr, gsu_por, gsu_clsr;
 
 } RcLine;
 typedef struct {
@@ -150,7 +156,8 @@ static unsigned rc_initialized, rc_mark, rc_schedule, rc_done, rc_resets, rc_arm
 static const char *rc_dir;
 static char rc_attached_dir[1024];
 static unsigned rc_timed, rc_timed_prep_ms, rc_timed_capture_ms = RC_TIMED_CAPTURE_MS;
-static unsigned rc_timed_long_er05, rc_capacity = RC_FRAMES, rc_timed_used;
+static unsigned rc_timed_long_er05, rc_timed_boss20;
+static unsigned rc_capacity = RC_FRAMES, rc_timed_used, rc_allocated_capacity;
 static SDL_atomic_t rc_timed_stop, rc_timed_completed, rc_timed_reset;
 static SDL_atomic_t rc_timed_writer_done;
 static uint64_t rc_deadline_counter;
@@ -158,11 +165,18 @@ static uint64_t rc_capture_start_counter;
 static uint64_t rc_capture_start_utc_ms;
 static uint64_t rc_requested_deadline_utc;
 static SDL_atomic_t rc_frame_cap_drops;
-static unsigned rc_er09_probe; /* passive; never selects a renderer */
+static unsigned rc_video_probe; /* passive; never selects a renderer */
+static unsigned rc_er07_bg2_defer; /* opt-in phase experiment, not a fix */
+static unsigned rc_draw_deferred_vofs_mask = 1u << 2;
+static unsigned rc_er07_boss_probe; /* independent of historical ER-07/ER-10 */
 static int rc_requested_renderer = -1; /* host-only capture override; no guest input */
 static unsigned rc_box_enabled, rc_box_x, rc_box_y, rc_box_w, rc_box_h;
 static uint64_t rc_boundary_serial; /* observer notifications, not guest state */
 static int SDLCALL rc_timed_writer(void *unused);
+static unsigned rc_er07_bg2_phase_active(void) {
+    return rc_initialized && !rc_done && rc_er07_boss_probe && rc_er07_bg2_defer &&
+        !(rc_timed && (SDL_AtomicGet(&rc_timed_stop) || SDL_AtomicGet(&rc_timed_writer_done)));
+}
 static uint64_t rc_utc_ms(void) {
 #ifdef _WIN32
     FILETIME ft; ULARGE_INTEGER ticks;
@@ -189,9 +203,15 @@ static const char *rc_attach_request(void) {
     request = rc_fopen(path, "rb");
     if (!request) return NULL;
     if (!fgets(rc_attached_dir, sizeof(rc_attached_dir), request)) rc_attached_dir[0] = 0;
+    rc_timed_boss20=0;
     { char mode[32];
       if (fgets(mode, sizeof(mode), request)) {
-          if(!strncmp(mode,"timed2prep5cap10\n",17)) {
+          if(!strncmp(mode,"timed2prep5cap20\n",17)) {
+              rc_timed=1; rc_timed_prep_ms=RC_TIMED_PREP_MS;
+              rc_timed_capture_ms=RC_TIMED_BOSS20_CAPTURE_MS;
+              rc_timed_long_er05=1; rc_timed_boss20=1;
+          }
+          else if(!strncmp(mode,"timed2prep5cap10\n",17)) {
               rc_timed=1; rc_timed_prep_ms=RC_TIMED_PREP_MS;
               rc_timed_capture_ms=RC_TIMED_ER05_CAPTURE_MS; rc_timed_long_er05=1;
           }
@@ -204,7 +224,7 @@ static const char *rc_attach_request(void) {
               rc_timed_capture_ms=RC_TIMED_CAPTURE_MS; rc_timed_long_er05=0;
           }
       } }
-    rc_requested_renderer=-1; rc_er09_probe=0;
+    rc_requested_renderer=-1; rc_video_probe=rc_er07_boss_probe=rc_er07_bg2_defer=0;
     rc_box_enabled=rc_box_x=rc_box_y=rc_box_w=rc_box_h=0;
     { char roi[96]={0}; unsigned x,y,w,h; int renderer;
       if (fgets(roi,sizeof(roi),request) &&
@@ -214,8 +234,19 @@ static const char *rc_attach_request(void) {
       } else if (sscanf(roi,"renderer %d",&renderer)==1 && (renderer==0 || renderer==1)) {
           rc_requested_renderer=renderer;
       } else if (!strncmp(roi,"er09 passive",12)) {
-          rc_er09_probe=1;
+          rc_video_probe=1;
+      } else if (sscanf(roi,"er07 boss renderer %d",&renderer)==1 &&
+                 (renderer==0 || renderer==1)) {
+          rc_video_probe=rc_er07_boss_probe=1;
+          rc_requested_renderer=renderer;
+      } else if (!strncmp(roi,"er07 boss passive",17)) {
+          rc_video_probe=rc_er07_boss_probe=1;
       } }
+    { char experiment[96]={0};
+      if(rc_er07_boss_probe && fgets(experiment,sizeof(experiment),request) &&
+         !strncmp(experiment,"er07 experiment bg2vofs-delay1",30))
+          rc_er07_bg2_defer=1;
+    }
     fclose(request);
     rc_attached_dir[strcspn(rc_attached_dir, "\r\n")] = 0;
     /* Consume the single per-process rendezvous so this same game can be
@@ -290,7 +321,7 @@ static void rc_probe(unsigned stage) {
     p->stage=stage; p->cpu=g_cpu.master_cycles; p->beam=g_snes->beamMasterLast;
     p->v=g_snes->vPos; p->h=g_snes->hPos;
     ppu_rasterProbe(g_ppu, &p->state);
-    if(rc_box_enabled) {
+    if(rc_box_enabled || rc_er07_boss_probe) {
         p->boundary_serial=rc_boundary_serial;
         memcpy(p->hscroll,g_ppu->hScroll,sizeof(p->hscroll));
         memcpy(p->vscroll,g_ppu->vScroll,sizeof(p->vscroll));
@@ -341,7 +372,7 @@ static void rc_event(int boundary, uint16_t reg, uint8_t value) {
     if (!rc_current) return;
     /* ER-05 needs control-register timing, not thousands of redacted bytes.
      * Keep bulk-port counts by origin/phase; DMA metadata remains separate. */
-    if(rc_box_enabled && !boundary &&
+    if((rc_box_enabled || rc_er07_boss_probe) && !boundary &&
        (reg==0x2104 || reg==0x2118 || reg==0x2119 || reg==0x2122)) {
         unsigned port=reg==0x2104?0:reg==0x2118?1:reg==0x2119?2:3;
         unsigned source=g_ppu_wlog_src<4?g_ppu_wlog_src:4;
@@ -381,12 +412,22 @@ static void rc_begin(void) {
         } else rc_dir = getenv("YI_CAPTURE_DIR");
         if (rc_dir && *rc_dir) {
             rc_initialized = 1;
-            rc_capacity=rc_timed?(rc_timed_long_er05?RC_TIMED_ER05_FRAMES:RC_TIMED_FRAMES):RC_FRAMES;
-            if (sizeof(RcFrame) * rc_capacity > (rc_timed?(rc_timed_long_er05?768u:512u):64u) * 1024u * 1024u) {
+            rc_capacity=rc_timed?(rc_timed_boss20?RC_TIMED_BOSS20_FRAMES:
+                (rc_timed_long_er05?RC_TIMED_ER05_FRAMES:RC_TIMED_FRAMES)):RC_FRAMES;
+            if (sizeof(RcFrame) * rc_capacity > (rc_timed?(rc_timed_boss20?1536u:(rc_timed_long_er05?768u:512u)):64u) * 1024u * 1024u) {
                 fputs("YI capture: exceeds memory budget\n", stderr);
                 rc_status("capture.failed", "Memory budget exceeded\n"); return;
             }
-            if (!rc_ring) rc_ring = calloc(rc_capacity, sizeof(RcFrame));
+            /* A reusable shorter batch cannot hold a larger request. Do not
+             * resize memory that a timed writer may have owned; restart instead. */
+            if(rc_ring && rc_capacity>rc_allocated_capacity) {
+                rc_status("capture.failed", "Requested window exceeds retained allocation; restart the game before a longer capture.\n");
+                rc_done=1; return;
+            }
+            if (!rc_ring) {
+                rc_ring = calloc(rc_capacity, sizeof(RcFrame));
+                if(rc_ring) rc_allocated_capacity=rc_capacity;
+            }
             if (!rc_ring) { fputs("YI capture: allocation failed\n", stderr);
                 rc_status("capture.failed", "Allocation failed\n");
                 rc_initialized=0; return; }
@@ -401,9 +442,22 @@ static void rc_begin(void) {
             ppu_set_display_observer(trace_observe);
             ppu_set_raster_probe_observer(rc_probe);
             dma_set_trace_observer(rc_dma_trace);
-            rc_status("capture.armed", rc_er09_probe ? "yi-render-er09-passive-v1 preparation_seconds=5 capture_seconds=10 frame_cap=620 pre=0 renderer=unchanged\n" : rc_timed_long_er05
+            if(rc_er07_boss_probe)
+                rc_status("capture.experiment", rc_er07_bg2_defer
+                    ? "yi-render-er07-bg2-phase-v1 mode=delay1 only_HDMA_BG2VOFS baseline_BG3_preserved\n"
+                    : "yi-render-er07-bg2-phase-v1 mode=baseline baseline_BG3_preserved\n");
+            if(rc_er07_boss_probe && rc_requested_renderer>=0) {
+                char armed[320];
+                snprintf(armed,sizeof(armed),
+                    "yi-render-er07-boss-passive-v1 yi-render-er07-boss-select-v1 %s preparation_seconds=5 capture_seconds=%u frame_cap=%u pre=0 renderer_requested=%d host_draw_only=1\n",
+                    rc_timed_boss20?"yi-render-er07-boss-20s-v1":"",
+                    rc_timed_capture_ms/1000,rc_capacity,rc_requested_renderer);
+                rc_status("capture.armed",armed);
+            } else {
+            rc_status("capture.armed", rc_er07_boss_probe && rc_timed_boss20 ? "yi-render-er07-boss-passive-v1 yi-render-er07-boss-20s-v1 preparation_seconds=5 capture_seconds=20 frame_cap=1240 pre=0 memory_budget_mib=1536 renderer=unchanged\n" : rc_er07_boss_probe ? "yi-render-er07-boss-passive-v1 preparation_seconds=5 capture_seconds=10 frame_cap=620 pre=0 renderer=unchanged\n" : rc_video_probe ? "yi-render-er09-passive-v1 preparation_seconds=5 capture_seconds=10 frame_cap=620 pre=0 renderer=unchanged\n" : rc_timed_long_er05
                 ? "yi-er07-bg3vofs-defer-v1 yi-render-vram-consumed-v1 yi-render-select-v1 yi-render-input-v1 yi-render-timed-window-v2 yi-render-timed-window-er05-10s-v1 preparation_seconds=5 capture_seconds=10 frame_cap=620 pre=0 memory_budget_mib=768\n"
                 : (rc_timed ? (rc_timed_prep_ms ? "yi-render-timed-window-v2 preparation_seconds=5 capture_seconds=2 frame_cap=360 pre=0\n" : "yi-render-timed-v1 seconds=5 frame_cap=360 pre=0\n") : "yi-render-attach-v1 pre=8 post=16 batch_cap=1\n"));
+            }
             fprintf(stderr, "YI capture: armed, %zu bytes, one batch\n", sizeof(RcFrame)*rc_capacity);
         }
     }
@@ -550,7 +604,23 @@ static void rc_row(const Ppu *p, unsigned line) {
     SuperFx *fx;
     if (!rc_current || !line || line > 224) return;
     r = &rc_current->line[line-1];
-    if(rc_requested_renderer>=0 || rc_er09_probe) rc_consumed_memory(p,line,r);
+    if(rc_requested_renderer>=0 || rc_video_probe) rc_consumed_memory(p,line,r);
+    if(rc_er07_boss_probe) {
+        r->obj_oam_hash=rc_hash_bytes(p->oam,sizeof(p->oam));
+        r->obj_high_hash=rc_hash_bytes(p->highOam,sizeof(p->highOam));
+        r->obj_cgram_hash=rc_hash_bytes(p->cgram,sizeof(p->cgram));
+        r->obj_buffer_hash=rc_hash_bytes(p->objBuffer.data+kPpuExtraLeftRight,
+                                       256*sizeof(PpuZbufType));
+        r->obj_first=r->obj_last=256; /* no native OBJ pixels */
+        for(x=0;x<256;x++) if(p->objBuffer.data[kPpuExtraLeftRight+x]!=0x0500) {
+            if(!r->obj_pixels) r->obj_first=x;
+            r->obj_last=x; r->obj_pixels++;
+        }
+        r->obj_line_has_sprites=p->lineHasSprites;
+        r->obj_range_over=p->rangeOver; r->obj_time_over=p->timeOver;
+        r->obj_render_flags=p->renderFlags;
+        r->deferred_vofs_mask=rc_draw_deferred_vofs_mask;
+    }
     r->renderer = (p->renderFlags & kPpuRenderFlags_NewRenderer) != 0;
     r->cpu = g_cpu.master_cycles; r->beam = g_snes->beamMasterLast;
     r->v = g_snes->vPos; r->h = g_snes->hPos;
@@ -561,7 +631,12 @@ static void rc_row(const Ppu *p, unsigned line) {
     ppu_rasterStats(&r->journal, &r->dropped, &r->cursor, &r->completed);
     fx = g_snes->cart ? g_snes->cart->superfx : NULL;
     if (fx) { r->gsu_clock = fx->master_clock; r->instructions = fx->instruction_count;
-        r->sfr = fx->sfr; r->irq = fx->irq_pending; }
+        r->sfr = fx->sfr; r->irq = fx->irq_pending;
+        if(rc_er07_boss_probe) {
+            r->gsu_scmr=fx->scmr; r->gsu_scbr=fx->scbr;
+            r->gsu_por=fx->por; r->gsu_clsr=fx->clsr;
+        }
+    }
     if (!p->renderBuffer || width > RC_WIDTH || p->renderPitch < width*4u) {
         rc_current->invalid_rows++; return;
     }
@@ -592,7 +667,7 @@ static int SDLCALL rc_flush(void *unused) {
     FILE *f = rc_open("capture.tsv");
     if (!f) { perror("YI capture.tsv"); rc_status("capture.failed", "Cannot create capture.tsv\n"); if(!rc_timed) free(ring); return 1; }
     fprintf(f, "# yi-render-v3 request_mark=%u first=%u last=%u pre=%u post=%s preparation=%s bytes=%zu event_cap=%u batch_cap=1 resets=%u frame_cap=%u\n",
-        rc_mark, first, last, rc_timed?0:8, rc_timed?(rc_timed_long_er05?"10seconds":"2seconds"):"16frames", rc_timed?"5seconds":"none", sizeof(RcFrame)*rc_capacity, RC_EVENTS, rc_resets,rc_capacity);
+        rc_mark, first, last, rc_timed?0:8, rc_timed?(rc_timed_boss20?"20seconds":(rc_timed_long_er05?"10seconds":"2seconds")):"16frames", rc_timed?"5seconds":"none", sizeof(RcFrame)*rc_capacity, RC_EVENTS, rc_resets,rc_capacity);
     if(rc_timed) fprintf(f,"# timed completed=%u frame_cap_drops=%u capture_start_utc_ms=%llu capture_end_utc_ms=%llu start_counter=%llu end_counter=%llu host_counter_frequency=%llu end=%s incomplete_current_frame=excluded\n",rc_export.count,(unsigned)SDL_AtomicGet(&rc_frame_cap_drops),(unsigned long long)rc_capture_start_utc_ms,(unsigned long long)rc_requested_deadline_utc,(unsigned long long)rc_capture_start_counter,(unsigned long long)rc_deadline_counter,(unsigned long long)SDL_GetPerformanceFrequency(),rc_export.reset?"reset_partial":"monotonic_deadline");
     fputs("# yi-render-raster-probe-v1 cap=12 states=INIDISP,TM,TS,CGADSUB,CGWSEL stages=1:boundary_before,2:boundary_after,3:render_begin_before,4:render_begin_after,5:render_end_before,6:render_end_after,7:cpu_begin,8:cpu_end physical_slots=0,1 recording=current completed=current^1_when_have_completed\n", f);
     fputs("# counters=port-call; field=V225-journal-not-independent-ID; presentation=unavailable; beam during draw is parked; line=after-runLine-before-HDMA; clocks=master\n", f);
@@ -600,12 +675,24 @@ static int SDLCALL rc_flush(void *unused) {
     fputs("# yi-render-dma-hdma-v1 events=guest_writes_and_hdma_init_before_after channel_state=metadata_only pending_init=global_mask line=0_based_cpu_minus1\n", f);
     fputs("# dma_event: frame cpu beam V H drawLine phase kind address value channel active_mask pending_init aBank aAdr bAdr size mode indirect indBank tableAdr repCount doTransfer terminated dmaActive fixed decrement fromB offIndex\n", f);
     fputs("# hdma_sample: frame y channel hdmaActive terminated tableAdr repCount doTransfer indirect bAdr mode size aBank aAdr indBank dmaActive fixed decrement fromB unusedBit offIndex pending_init\n", f);
-    fprintf(f,"# yi-render-vram-consumed-v1 enabled=%u sampling=after_runLine_before_RenderEnd hashes=FNV1a_16_pages_4096bytes bg3=mode1_native256_no_mosaic_before_windows_priority_math pixel0=transparent payload=none\n",rc_requested_renderer>=0 || rc_er09_probe);
+    fprintf(f,"# yi-render-vram-consumed-v1 enabled=%u sampling=after_runLine_before_RenderEnd hashes=FNV1a_16_pages_4096bytes bg3=mode1_native256_no_mosaic_before_windows_priority_math pixel0=transparent payload=none\n",rc_requested_renderer>=0 || rc_video_probe);
     fputs("# consumed_vram: frame y recording_field consumed_field memory_count memory_dropped memory_next hdma_sources_valid external_vram write_count pointer increment increment_on_high remap hash_pages_0_to_15\n",f);
     fputs("# bg3_sample: frame y valid transparent color1 color2 color3 high_priority_nonzero fetch_hash\n",f);
-    if(rc_er09_probe) {
+    if(rc_video_probe && !rc_er07_boss_probe) {
         fputs("# yi-render-er09-passive-v1 renderer_selection=unchanged video_state=after_runLine camera_identity=unknown\n",f);
         fputs("# video_state: frame y mode BGMODE MOSAIC TM TS TMW TSW CGWSEL CGADSUB BG1_h BG1_v BG1SC BG2_h BG2_v BG2SC BG3_h BG3_v BG3SC BG4_h BG4_v BG4SC; named_values; remaining_registers_in_row_regs64\n",f);
+    }
+    if(rc_er07_boss_probe) {
+        fprintf(f,"# yi-render-er07-boss-passive-v1 renderer_requested=%d selection=%s scope=Boss_1-4 not_historical_ER07_ER10\n",
+            rc_requested_renderer,rc_requested_renderer<0?"unchanged":"explicit_host_draw_override");
+        if(rc_requested_renderer>=0)
+            fputs("# yi-render-er07-boss-select-v1 only_NewRenderer_bit_overridden caller_flags_restored_after_draw no_guest_input\n",f);
+        fprintf(f,"# yi-render-er07-bg2-phase-v1 requested=%s scope=HDMA_BG2VOFS consumption_latency_lines=%u baseline_BG3_preserved=1 guest_state_restored_by_driver\n",
+            rc_er07_bg2_defer?"delay1":"baseline",rc_er07_bg2_defer?1u:0u);
+        fputs("# phase_line: frame y deferred_vofs_mask; bits=BG1:1,BG2:2,BG3:4,BG4:8; mask_is_draw_policy_not_transfer_count; actual_consumed_scroll_in_video_state\n",f);
+        fputs("# obj_line: frame y oam_low_hash oam_high_hash cgram_hash obj_buffer_hash pixels first last line_has_sprites range_over time_over render_flags OBSEL; hashes=FNV1a; native_x=0..255; empty_bounds=256; buffer=after_evaluation_before_BG_windows_math_not_final_visibility; overflow_flags=PPU_model_latched_not_per_line_counts\n",f);
+        fputs("# video_state: frame y named_values; layout_shared_with_ER09; full_registers_in_row_regs64\n",f);
+        fputs("# gsu_video: frame y SCMR SCBR POR CLSR; sampled_while_guest_parked_not_scanline_execution; clocks_and_jobs_in_existing_records\n",f);
     }
     fputs("# yi-er07-bg3vofs-defer-v1 candidate=1 scope=HDMA_BG3VOFS_only latency_lines=1 default_driver_unchanged validation=pending\n",f);
     fputs("# yi-render-ab-v1 hotkey=R row_renderer=0:legacy,1:new\n", f);
@@ -615,7 +702,7 @@ static int SDLCALL rc_flush(void *unused) {
     fputs("# row: frame y valid width pitch cpu beam V H hashBGR nonblack journal dropped cursor completed gsuClock instructions SFR IRQ regs64 renderer\n", f);
     fputs("# regs64 layout=local Ppu.inidisp..cgwsel; offsets follow\n", f);
     fprintf(f,"# yi-render-box-v1 enabled=%u requested_roi=%u,%u,%u,%u max_rows=224 per_row_bytes=%zu coords=native_zero_based first_last_empty=800 run_tie=leftmost hash=FNV1a_RGB color_hash=FNV1a_RGB3 bulk_ports=counts_by_source_phase_when_enabled heuristic_not_object_tracking\n",rc_box_enabled,rc_box_x,rc_box_y,rc_box_w,rc_box_h,sizeof(RcBoxRow));
-    fprintf(f,"# yi-render-motion-v1 enabled=%u probe_cap=%u obj_phases=2 slots_per_phase=128 obj_bytes_per_frame=%zu signature=FNV1a_attr_and_size_no_coordinates hashes=FNV1a_raw_internal_bytes_no_payload boundary_serial=observer_stage2_notifications coords=SNES_signed_x_unsigned_y_before_widescreen size=square_renderer_model not_visibility_or_object_identity\n",rc_box_enabled,RC_PROBES,sizeof(ring[0].obj));
+    fprintf(f,"# yi-render-motion-v1 enabled=%u probe_cap=%u obj_phases=2 slots_per_phase=128 obj_bytes_per_frame=%zu signature=FNV1a_attr_and_size_no_coordinates hashes=FNV1a_raw_internal_bytes_no_payload boundary_serial=observer_stage2_notifications coords=SNES_signed_x_unsigned_y_before_widescreen size=square_renderer_model not_visibility_or_object_identity\n",rc_box_enabled || rc_er07_boss_probe,RC_PROBES,sizeof(ring[0].obj));
 #define RC_OFFSET(member) fprintf(f, "# reg %s offset=%zu bytes=%zu\n", #member, offsetof(Ppu, member)-offsetof(Ppu,inidisp), sizeof(g_ppu->member))
     RC_OFFSET(inidisp); RC_OFFSET(obsel); RC_OFFSET(bgmode); RC_OFFSET(mosaic);
     RC_OFFSET(bgXsc); RC_OFFSET(bgTileAdr); RC_OFFSET(m7sel); RC_OFFSET(setini);
@@ -657,7 +744,7 @@ static int SDLCALL rc_flush(void *unused) {
             else fputs("\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-",f);
             fprintf(f,"\t%u\n",e->channel<8?d->offIndex:0u);
         }
-        if(rc_box_enabled) {
+        if(rc_box_enabled || rc_er07_boss_probe) {
             static const unsigned ports[4]={0x2104,0x2118,0x2119,0x2122};
             unsigned port,source,phase;
             for(port=0;port<4;port++) for(source=0;source<5;source++) for(phase=0;phase<2;phase++)
@@ -671,13 +758,13 @@ static int SDLCALL rc_flush(void *unused) {
             for(k=0;k<5;k++) fprintf(f,"%02X",q->live[k]);
             for(k=0;k<2;k++) fprintf(f,"\tslot%u=%02X%02X%02X%02X%02X,count=%u,dropped=%u",k,q->base[k][0],q->base[k][1],q->base[k][2],q->base[k][3],q->base[k][4],q->count[k],q->dropped[k]);
             fputc('\n',f);
-            if(rc_box_enabled) {
+            if(rc_box_enabled || rc_er07_boss_probe) {
                 fprintf(f,"motion_probe\t%u\tstage=%u\tboundary_serial=%llu\toam_low_hash=%08X\toam_high_hash=%08X\tcgram_hash=%08X\toam_writes=%u",id,p->stage,(unsigned long long)p->boundary_serial,p->oam_low_hash,p->oam_high_hash,p->cgram_hash,p->oam_writes);
                 for(k=0;k<4;k++) fprintf(f,"\tBG%u_h=%u\tBG%u_v=%u",k+1,(unsigned)p->hscroll[k],k+1,(unsigned)p->vscroll[k]);
                 fputc('\n',f);
             }
         }
-        if(rc_box_enabled) {
+        if(rc_box_enabled || rc_er07_boss_probe) {
             unsigned phase,k;
             fprintf(f,"obj_summary\t%u\tlost=%u\n",id,b->obj_lost);
             for(phase=0;phase<2;phase++) {
@@ -702,7 +789,16 @@ static int SDLCALL rc_flush(void *unused) {
                 (unsigned long long)r->gsu_clock,(unsigned long long)r->instructions,r->sfr,r->irq);
             for(i=0;i<sizeof(r->regs);i++) fprintf(f,"%02X",r->regs[i]);
             fprintf(f,"\t%u\n",r->renderer);
-            if(rc_er09_probe) {
+            if(rc_er07_boss_probe) {
+                fprintf(f,"phase_line\t%u\t%u\t%02X\n",id,y,r->deferred_vofs_mask);
+                fprintf(f,"obj_line\t%u\t%u\t%08X\t%08X\t%08X\t%08X\t%u\t%u\t%u\t%u\t%u\t%u\t%08X\t%02X\n",
+                    id,y,r->obj_oam_hash,r->obj_high_hash,r->obj_cgram_hash,r->obj_buffer_hash,
+                    r->obj_pixels,r->obj_first,r->obj_last,r->obj_line_has_sprites,
+                    r->obj_range_over,r->obj_time_over,r->obj_render_flags,r->regs[1]);
+                fprintf(f,"gsu_video\t%u\t%u\t%02X\t%02X\t%02X\t%02X\n",
+                    id,y,r->gsu_scmr,r->gsu_scbr,r->gsu_por,r->gsu_clsr);
+            }
+            if(rc_video_probe) {
                 const uint8_t *s=r->regs;
 #define RC_ER09_OFF(member) (offsetof(Ppu,member)-offsetof(Ppu,inidisp))
                 fprintf(f,"video_state\t%u\t%u\tmode=%u\tBGMODE=%02X\tMOSAIC=%02X\tTM=%02X\tTS=%02X\tTMW=%02X\tTSW=%02X\tCGWSEL=%02X\tCGADSUB=%02X",id,y,
@@ -719,7 +815,7 @@ static int SDLCALL rc_flush(void *unused) {
                 fputc('\n',f);
 #undef RC_ER09_OFF
             }
-            if(rc_requested_renderer>=0 || rc_er09_probe) {
+            if(rc_requested_renderer>=0 || rc_video_probe) {
                 PpuRasterMemoryProbe *m=&r->memory;
                 fprintf(f,"consumed_vram\t%u\t%u\t%llu\t%llu\t%u\t%u\t%u\t%u\t%u\t%u\t%u\t%u\t%u\t%u",id,y,
                     (unsigned long long)m->recording_field,(unsigned long long)m->consumed_field,

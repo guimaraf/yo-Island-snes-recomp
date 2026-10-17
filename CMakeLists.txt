@@ -54,6 +54,13 @@ add_executable(SuperMarioWorld2YoshiSIslandSNESRecomp
 set_target_properties(SuperMarioWorld2YoshiSIslandSNESRecomp PROPERTIES
     OUTPUT_NAME "Yoshi's Island recomp"
 )
+option(YI_DELAY_BG2_TEST "Keep experimental BG2 VOFS delay active without capture" OFF)
+set_property(SOURCE src/game_rtl.c APPEND PROPERTY COMPILE_DEFINITIONS
+    YI_DELAY_BG2_TEST=$<BOOL:${YI_DELAY_BG2_TEST}>)
+if(YI_DELAY_BG2_TEST)
+    set_target_properties(SuperMarioWorld2YoshiSIslandSNESRecomp PROPERTIES
+        OUTPUT_NAME "Yoshi's Island recomp.DelayBG2-test")
+endif()
 
 # ROM identity. rom_identity.txt is the one place the digests live: the build
 # turns it into snesrecomp_rom_identity.h (SNESRECOMP_ROM_EXPECTED_SHA256 and
