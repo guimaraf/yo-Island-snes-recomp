@@ -76,6 +76,7 @@ typedef struct {
     uint32_t obj_oam_hash, obj_high_hash, obj_cgram_hash, obj_buffer_hash;
     unsigned obj_pixels, obj_first, obj_last, obj_line_has_sprites;
     unsigned obj_range_over, obj_time_over, obj_render_flags, deferred_vofs_mask;
+    unsigned paired_hofs_policy, deferred_hofs_mask;
     uint8_t gsu_scmr, gsu_scbr, gsu_por, gsu_clsr;
 
 } RcLine;
@@ -168,6 +169,8 @@ static SDL_atomic_t rc_frame_cap_drops;
 static unsigned rc_video_probe; /* passive; never selects a renderer */
 static unsigned rc_er07_bg2_defer; /* opt-in phase experiment, not a fix */
 static unsigned rc_draw_deferred_vofs_mask = 1u << 2;
+static unsigned rc_draw_paired_hofs_mask;
+static unsigned rc_er12_probe; /* passive lava-bar capture; no phase experiment */
 static unsigned rc_er07_boss_probe; /* independent of historical ER-07/ER-10 */
 static int rc_requested_renderer = -1; /* host-only capture override; no guest input */
 static unsigned rc_box_enabled, rc_box_x, rc_box_y, rc_box_w, rc_box_h;
@@ -206,7 +209,11 @@ static const char *rc_attach_request(void) {
     rc_timed_boss20=0;
     { char mode[32];
       if (fgets(mode, sizeof(mode), request)) {
-          if(!strncmp(mode,"timed2prep5cap20\n",17)) {
+          if(!strncmp(mode,"timed2prep5cap5\n",16)) {
+              rc_timed=1; rc_timed_prep_ms=RC_TIMED_PREP_MS;
+              rc_timed_capture_ms=5000u; rc_timed_long_er05=0;
+          }
+          else if(!strncmp(mode,"timed2prep5cap20\n",17)) {
               rc_timed=1; rc_timed_prep_ms=RC_TIMED_PREP_MS;
               rc_timed_capture_ms=RC_TIMED_BOSS20_CAPTURE_MS;
               rc_timed_long_er05=1; rc_timed_boss20=1;
@@ -224,6 +231,7 @@ static const char *rc_attach_request(void) {
               rc_timed_capture_ms=RC_TIMED_CAPTURE_MS; rc_timed_long_er05=0;
           }
       } }
+    rc_er12_probe=0;
     rc_requested_renderer=-1; rc_video_probe=rc_er07_boss_probe=rc_er07_bg2_defer=0;
     rc_box_enabled=rc_box_x=rc_box_y=rc_box_w=rc_box_h=0;
     { char roi[96]={0}; unsigned x,y,w,h; int renderer;
@@ -233,6 +241,8 @@ static const char *rc_attach_request(void) {
           rc_box_enabled=1; rc_box_x=x; rc_box_y=y; rc_box_w=w; rc_box_h=h;
       } else if (sscanf(roi,"renderer %d",&renderer)==1 && (renderer==0 || renderer==1)) {
           rc_requested_renderer=renderer;
+      } else if (!strncmp(roi,"er12 passive",12)) {
+          rc_video_probe=rc_er12_probe=1;
       } else if (!strncmp(roi,"er09 passive",12)) {
           rc_video_probe=1;
       } else if (sscanf(roi,"er07 boss renderer %d",&renderer)==1 &&
@@ -321,7 +331,7 @@ static void rc_probe(unsigned stage) {
     p->stage=stage; p->cpu=g_cpu.master_cycles; p->beam=g_snes->beamMasterLast;
     p->v=g_snes->vPos; p->h=g_snes->hPos;
     ppu_rasterProbe(g_ppu, &p->state);
-    if(rc_box_enabled || rc_er07_boss_probe) {
+    if(rc_box_enabled || rc_er07_boss_probe || rc_er12_probe) {
         p->boundary_serial=rc_boundary_serial;
         memcpy(p->hscroll,g_ppu->hScroll,sizeof(p->hscroll));
         memcpy(p->vscroll,g_ppu->vScroll,sizeof(p->vscroll));
@@ -372,7 +382,7 @@ static void rc_event(int boundary, uint16_t reg, uint8_t value) {
     if (!rc_current) return;
     /* ER-05 needs control-register timing, not thousands of redacted bytes.
      * Keep bulk-port counts by origin/phase; DMA metadata remains separate. */
-    if((rc_box_enabled || rc_er07_boss_probe) && !boundary &&
+    if((rc_box_enabled || rc_er07_boss_probe || rc_er12_probe) && !boundary &&
        (reg==0x2104 || reg==0x2118 || reg==0x2119 || reg==0x2122)) {
         unsigned port=reg==0x2104?0:reg==0x2118?1:reg==0x2119?2:3;
         unsigned source=g_ppu_wlog_src<4?g_ppu_wlog_src:4;
@@ -446,7 +456,11 @@ static void rc_begin(void) {
                 rc_status("capture.experiment", rc_er07_bg2_defer
                     ? "yi-render-er07-bg2-phase-v1 mode=delay1 only_HDMA_BG2VOFS baseline_BG3_preserved\n"
                     : "yi-render-er07-bg2-phase-v1 mode=baseline baseline_BG3_preserved\n");
-            if(rc_er07_boss_probe && rc_requested_renderer>=0) {
+            if(rc_er12_probe) {
+                rc_status("capture.armed", YI_ER12_BG3_PAIR_TEST
+                    ? "yi-render-er12-passive-v1 yi-render-er12-bg3-pair-test-v1 preparation_seconds=5 capture_seconds=5 frame_cap=360 pre=0 renderer=unchanged paired_hofs_policy=04 vofs_policy=06\n"
+                    : "yi-render-er12-passive-v1 preparation_seconds=5 capture_seconds=5 frame_cap=360 pre=0 renderer=unchanged phase=unchanged\n");
+            } else if(rc_er07_boss_probe && rc_requested_renderer>=0) {
                 char armed[320];
                 snprintf(armed,sizeof(armed),
                     "yi-render-er07-boss-passive-v1 yi-render-er07-boss-select-v1 %s preparation_seconds=5 capture_seconds=%u frame_cap=%u pre=0 renderer_requested=%d host_draw_only=1\n",
@@ -605,7 +619,7 @@ static void rc_row(const Ppu *p, unsigned line) {
     if (!rc_current || !line || line > 224) return;
     r = &rc_current->line[line-1];
     if(rc_requested_renderer>=0 || rc_video_probe) rc_consumed_memory(p,line,r);
-    if(rc_er07_boss_probe) {
+    if(rc_er07_boss_probe || rc_er12_probe) {
         r->obj_oam_hash=rc_hash_bytes(p->oam,sizeof(p->oam));
         r->obj_high_hash=rc_hash_bytes(p->highOam,sizeof(p->highOam));
         r->obj_cgram_hash=rc_hash_bytes(p->cgram,sizeof(p->cgram));
@@ -620,6 +634,8 @@ static void rc_row(const Ppu *p, unsigned line) {
         r->obj_range_over=p->rangeOver; r->obj_time_over=p->timeOver;
         r->obj_render_flags=p->renderFlags;
         r->deferred_vofs_mask=rc_draw_deferred_vofs_mask;
+        r->paired_hofs_policy=rc_draw_paired_hofs_mask;
+        r->deferred_hofs_mask=snes_beam_frame_driver_observed_deferred_hofs_mask();
     }
     r->renderer = (p->renderFlags & kPpuRenderFlags_NewRenderer) != 0;
     r->cpu = g_cpu.master_cycles; r->beam = g_snes->beamMasterLast;
@@ -632,7 +648,7 @@ static void rc_row(const Ppu *p, unsigned line) {
     fx = g_snes->cart ? g_snes->cart->superfx : NULL;
     if (fx) { r->gsu_clock = fx->master_clock; r->instructions = fx->instruction_count;
         r->sfr = fx->sfr; r->irq = fx->irq_pending;
-        if(rc_er07_boss_probe) {
+        if(rc_er07_boss_probe || rc_er12_probe) {
             r->gsu_scmr=fx->scmr; r->gsu_scbr=fx->scbr;
             r->gsu_por=fx->por; r->gsu_clsr=fx->clsr;
         }
@@ -667,7 +683,7 @@ static int SDLCALL rc_flush(void *unused) {
     FILE *f = rc_open("capture.tsv");
     if (!f) { perror("YI capture.tsv"); rc_status("capture.failed", "Cannot create capture.tsv\n"); if(!rc_timed) free(ring); return 1; }
     fprintf(f, "# yi-render-v3 request_mark=%u first=%u last=%u pre=%u post=%s preparation=%s bytes=%zu event_cap=%u batch_cap=1 resets=%u frame_cap=%u\n",
-        rc_mark, first, last, rc_timed?0:8, rc_timed?(rc_timed_boss20?"20seconds":(rc_timed_long_er05?"10seconds":"2seconds")):"16frames", rc_timed?"5seconds":"none", sizeof(RcFrame)*rc_capacity, RC_EVENTS, rc_resets,rc_capacity);
+        rc_mark, first, last, rc_timed?0:8, rc_timed?(rc_er12_probe?"5seconds":rc_timed_boss20?"20seconds":(rc_timed_long_er05?"10seconds":"2seconds")):"16frames", rc_timed?"5seconds":"none", sizeof(RcFrame)*rc_capacity, RC_EVENTS, rc_resets,rc_capacity);
     if(rc_timed) fprintf(f,"# timed completed=%u frame_cap_drops=%u capture_start_utc_ms=%llu capture_end_utc_ms=%llu start_counter=%llu end_counter=%llu host_counter_frequency=%llu end=%s incomplete_current_frame=excluded\n",rc_export.count,(unsigned)SDL_AtomicGet(&rc_frame_cap_drops),(unsigned long long)rc_capture_start_utc_ms,(unsigned long long)rc_requested_deadline_utc,(unsigned long long)rc_capture_start_counter,(unsigned long long)rc_deadline_counter,(unsigned long long)SDL_GetPerformanceFrequency(),rc_export.reset?"reset_partial":"monotonic_deadline");
     fputs("# yi-render-raster-probe-v1 cap=12 states=INIDISP,TM,TS,CGADSUB,CGWSEL stages=1:boundary_before,2:boundary_after,3:render_begin_before,4:render_begin_after,5:render_end_before,6:render_end_after,7:cpu_begin,8:cpu_end physical_slots=0,1 recording=current completed=current^1_when_have_completed\n", f);
     fputs("# counters=port-call; field=V225-journal-not-independent-ID; presentation=unavailable; beam during draw is parked; line=after-runLine-before-HDMA; clocks=master\n", f);
@@ -678,17 +694,22 @@ static int SDLCALL rc_flush(void *unused) {
     fprintf(f,"# yi-render-vram-consumed-v1 enabled=%u sampling=after_runLine_before_RenderEnd hashes=FNV1a_16_pages_4096bytes bg3=mode1_native256_no_mosaic_before_windows_priority_math pixel0=transparent payload=none\n",rc_requested_renderer>=0 || rc_video_probe);
     fputs("# consumed_vram: frame y recording_field consumed_field memory_count memory_dropped memory_next hdma_sources_valid external_vram write_count pointer increment increment_on_high remap hash_pages_0_to_15\n",f);
     fputs("# bg3_sample: frame y valid transparent color1 color2 color3 high_priority_nonzero fetch_hash\n",f);
-    if(rc_video_probe && !rc_er07_boss_probe) {
+    if(rc_video_probe && !rc_er07_boss_probe && !rc_er12_probe) {
         fputs("# yi-render-er09-passive-v1 renderer_selection=unchanged video_state=after_runLine camera_identity=unknown\n",f);
         fputs("# video_state: frame y mode BGMODE MOSAIC TM TS TMW TSW CGWSEL CGADSUB BG1_h BG1_v BG1SC BG2_h BG2_v BG2SC BG3_h BG3_v BG3SC BG4_h BG4_v BG4SC; named_values; remaining_registers_in_row_regs64\n",f);
     }
-    if(rc_er07_boss_probe) {
-        fprintf(f,"# yi-render-er07-boss-passive-v1 renderer_requested=%d selection=%s scope=Boss_1-4 not_historical_ER07_ER10\n",
-            rc_requested_renderer,rc_requested_renderer<0?"unchanged":"explicit_host_draw_override");
-        if(rc_requested_renderer>=0)
-            fputs("# yi-render-er07-boss-select-v1 only_NewRenderer_bit_overridden caller_flags_restored_after_draw no_guest_input\n",f);
-        fprintf(f,"# yi-render-er07-bg2-phase-v1 requested=%s scope=HDMA_BG2VOFS consumption_latency_lines=%u baseline_BG3_preserved=1 guest_state_restored_by_driver\n",
-            rc_er07_bg2_defer?"delay1":"baseline",rc_er07_bg2_defer?1u:0u);
+    if(rc_er07_boss_probe || rc_er12_probe) {
+        if(rc_er12_probe) {
+            fprintf(f,"# yi-render-er12-passive-v1 renderer_selection=unchanged capture_changes_policy=0 continuous_BG2_build=%u paired_BG3_build=%u actual_vofs_policy_in_phase_line=1\n",(unsigned)YI_DELAY_BG2_TEST,(unsigned)YI_ER12_BG3_PAIR_TEST);
+            fputs("# phase_h_line: frame y paired_hofs_policy actual_deferred_hofs_mask; conditional_on_HDMA_writing_both_axes; consumed_scroll_in_video_state\n",f);
+        } else {
+            fprintf(f,"# yi-render-er07-boss-passive-v1 renderer_requested=%d selection=%s scope=Boss_1-4 not_historical_ER07_ER10\n",
+                rc_requested_renderer,rc_requested_renderer<0?"unchanged":"explicit_host_draw_override");
+            if(rc_requested_renderer>=0)
+                fputs("# yi-render-er07-boss-select-v1 only_NewRenderer_bit_overridden caller_flags_restored_after_draw no_guest_input\n",f);
+            fprintf(f,"# yi-render-er07-bg2-phase-v1 requested=%s scope=HDMA_BG2VOFS consumption_latency_lines=%u baseline_BG3_preserved=1 guest_state_restored_by_driver\n",
+                rc_er07_bg2_defer?"delay1":"baseline",rc_er07_bg2_defer?1u:0u);
+        }
         fputs("# phase_line: frame y deferred_vofs_mask; bits=BG1:1,BG2:2,BG3:4,BG4:8; mask_is_draw_policy_not_transfer_count; actual_consumed_scroll_in_video_state\n",f);
         fputs("# obj_line: frame y oam_low_hash oam_high_hash cgram_hash obj_buffer_hash pixels first last line_has_sprites range_over time_over render_flags OBSEL; hashes=FNV1a; native_x=0..255; empty_bounds=256; buffer=after_evaluation_before_BG_windows_math_not_final_visibility; overflow_flags=PPU_model_latched_not_per_line_counts\n",f);
         fputs("# video_state: frame y named_values; layout_shared_with_ER09; full_registers_in_row_regs64\n",f);
@@ -702,7 +723,7 @@ static int SDLCALL rc_flush(void *unused) {
     fputs("# row: frame y valid width pitch cpu beam V H hashBGR nonblack journal dropped cursor completed gsuClock instructions SFR IRQ regs64 renderer\n", f);
     fputs("# regs64 layout=local Ppu.inidisp..cgwsel; offsets follow\n", f);
     fprintf(f,"# yi-render-box-v1 enabled=%u requested_roi=%u,%u,%u,%u max_rows=224 per_row_bytes=%zu coords=native_zero_based first_last_empty=800 run_tie=leftmost hash=FNV1a_RGB color_hash=FNV1a_RGB3 bulk_ports=counts_by_source_phase_when_enabled heuristic_not_object_tracking\n",rc_box_enabled,rc_box_x,rc_box_y,rc_box_w,rc_box_h,sizeof(RcBoxRow));
-    fprintf(f,"# yi-render-motion-v1 enabled=%u probe_cap=%u obj_phases=2 slots_per_phase=128 obj_bytes_per_frame=%zu signature=FNV1a_attr_and_size_no_coordinates hashes=FNV1a_raw_internal_bytes_no_payload boundary_serial=observer_stage2_notifications coords=SNES_signed_x_unsigned_y_before_widescreen size=square_renderer_model not_visibility_or_object_identity\n",rc_box_enabled || rc_er07_boss_probe,RC_PROBES,sizeof(ring[0].obj));
+    fprintf(f,"# yi-render-motion-v1 enabled=%u probe_cap=%u obj_phases=2 slots_per_phase=128 obj_bytes_per_frame=%zu signature=FNV1a_attr_and_size_no_coordinates hashes=FNV1a_raw_internal_bytes_no_payload boundary_serial=observer_stage2_notifications coords=SNES_signed_x_unsigned_y_before_widescreen size=square_renderer_model not_visibility_or_object_identity\n",rc_box_enabled || rc_er07_boss_probe || rc_er12_probe,RC_PROBES,sizeof(ring[0].obj));
 #define RC_OFFSET(member) fprintf(f, "# reg %s offset=%zu bytes=%zu\n", #member, offsetof(Ppu, member)-offsetof(Ppu,inidisp), sizeof(g_ppu->member))
     RC_OFFSET(inidisp); RC_OFFSET(obsel); RC_OFFSET(bgmode); RC_OFFSET(mosaic);
     RC_OFFSET(bgXsc); RC_OFFSET(bgTileAdr); RC_OFFSET(m7sel); RC_OFFSET(setini);
@@ -744,7 +765,7 @@ static int SDLCALL rc_flush(void *unused) {
             else fputs("\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-",f);
             fprintf(f,"\t%u\n",e->channel<8?d->offIndex:0u);
         }
-        if(rc_box_enabled || rc_er07_boss_probe) {
+        if(rc_box_enabled || rc_er07_boss_probe || rc_er12_probe) {
             static const unsigned ports[4]={0x2104,0x2118,0x2119,0x2122};
             unsigned port,source,phase;
             for(port=0;port<4;port++) for(source=0;source<5;source++) for(phase=0;phase<2;phase++)
@@ -758,13 +779,13 @@ static int SDLCALL rc_flush(void *unused) {
             for(k=0;k<5;k++) fprintf(f,"%02X",q->live[k]);
             for(k=0;k<2;k++) fprintf(f,"\tslot%u=%02X%02X%02X%02X%02X,count=%u,dropped=%u",k,q->base[k][0],q->base[k][1],q->base[k][2],q->base[k][3],q->base[k][4],q->count[k],q->dropped[k]);
             fputc('\n',f);
-            if(rc_box_enabled || rc_er07_boss_probe) {
+            if(rc_box_enabled || rc_er07_boss_probe || rc_er12_probe) {
                 fprintf(f,"motion_probe\t%u\tstage=%u\tboundary_serial=%llu\toam_low_hash=%08X\toam_high_hash=%08X\tcgram_hash=%08X\toam_writes=%u",id,p->stage,(unsigned long long)p->boundary_serial,p->oam_low_hash,p->oam_high_hash,p->cgram_hash,p->oam_writes);
                 for(k=0;k<4;k++) fprintf(f,"\tBG%u_h=%u\tBG%u_v=%u",k+1,(unsigned)p->hscroll[k],k+1,(unsigned)p->vscroll[k]);
                 fputc('\n',f);
             }
         }
-        if(rc_box_enabled || rc_er07_boss_probe) {
+        if(rc_box_enabled || rc_er07_boss_probe || rc_er12_probe) {
             unsigned phase,k;
             fprintf(f,"obj_summary\t%u\tlost=%u\n",id,b->obj_lost);
             for(phase=0;phase<2;phase++) {
@@ -789,8 +810,9 @@ static int SDLCALL rc_flush(void *unused) {
                 (unsigned long long)r->gsu_clock,(unsigned long long)r->instructions,r->sfr,r->irq);
             for(i=0;i<sizeof(r->regs);i++) fprintf(f,"%02X",r->regs[i]);
             fprintf(f,"\t%u\n",r->renderer);
-            if(rc_er07_boss_probe) {
+            if(rc_er07_boss_probe || rc_er12_probe) {
                 fprintf(f,"phase_line\t%u\t%u\t%02X\n",id,y,r->deferred_vofs_mask);
+                if(rc_er12_probe) fprintf(f,"phase_h_line\t%u\t%u\t%02X\t%02X\n",id,y,r->paired_hofs_policy,r->deferred_hofs_mask);
                 fprintf(f,"obj_line\t%u\t%u\t%08X\t%08X\t%08X\t%08X\t%u\t%u\t%u\t%u\t%u\t%u\t%08X\t%02X\n",
                     id,y,r->obj_oam_hash,r->obj_high_hash,r->obj_cgram_hash,r->obj_buffer_hash,
                     r->obj_pixels,r->obj_first,r->obj_last,r->obj_line_has_sprites,

@@ -7,6 +7,10 @@
 #define YI_DELAY_BG2_TEST 0
 #endif
 
+#ifndef YI_ER12_BG3_PAIR_TEST
+#define YI_ER12_BG3_PAIR_TEST 0
+#endif
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -171,8 +175,10 @@ void GameDrawPpuFrame(void)
      * BG2 enabled throughout play; normal builds require an armed experiment. */
     rc_draw_deferred_vofs_mask = (1u<<2) |
         ((YI_DELAY_BG2_TEST || rc_er07_bg2_phase_active()) ? (1u<<1) : 0);
-    snes_beam_frame_driver_draw_ppu_frame_observed_deferred_vofs(
-        (trace_active() || rc_current) ? trace_drawn_line : NULL, NULL, rc_draw_deferred_vofs_mask);
+    rc_draw_paired_hofs_mask = YI_ER12_BG3_PAIR_TEST ? (1u<<2) : 0;
+    snes_beam_frame_driver_draw_ppu_frame_observed_deferred_scroll(
+        (trace_active() || rc_current) ? trace_drawn_line : NULL, NULL,
+        rc_draw_deferred_vofs_mask, rc_draw_paired_hofs_mask);
     trace_state("draw_end", -1);
     g_ppu->renderFlags = saved_render_flags;
     rc_end();

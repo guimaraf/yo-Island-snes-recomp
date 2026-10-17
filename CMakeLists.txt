@@ -55,11 +55,21 @@ set_target_properties(SuperMarioWorld2YoshiSIslandSNESRecomp PROPERTIES
     OUTPUT_NAME "Yoshi's Island recomp"
 )
 option(YI_DELAY_BG2_TEST "Keep experimental BG2 VOFS delay active without capture" OFF)
+option(YI_ER12_BG3_PAIR_TEST "Pair BG3 HDMA HOFS delay with existing VOFS delay" OFF)
 set_property(SOURCE src/game_rtl.c APPEND PROPERTY COMPILE_DEFINITIONS
-    YI_DELAY_BG2_TEST=$<BOOL:${YI_DELAY_BG2_TEST}>)
+    YI_DELAY_BG2_TEST=$<BOOL:${YI_DELAY_BG2_TEST}>
+    YI_ER12_BG3_PAIR_TEST=$<BOOL:${YI_ER12_BG3_PAIR_TEST}>)
 if(YI_DELAY_BG2_TEST)
     set_target_properties(SuperMarioWorld2YoshiSIslandSNESRecomp PROPERTIES
         OUTPUT_NAME "Yoshi's Island recomp.DelayBG2-test")
+endif()
+
+if(YI_ER12_BG3_PAIR_TEST)
+    if(NOT YI_DELAY_BG2_TEST)
+        message(FATAL_ERROR "ER12 pair test requires YI_DELAY_BG2_TEST=ON to preserve the capture baseline")
+    endif()
+    set_target_properties(SuperMarioWorld2YoshiSIslandSNESRecomp PROPERTIES
+        OUTPUT_NAME "Yoshi's Island recomp.ER12-BG3Pair-test")
 endif()
 
 # ROM identity. rom_identity.txt is the one place the digests live: the build

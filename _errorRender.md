@@ -24,14 +24,18 @@ necessarily the video's chronological order.
   ER-09 was confirmed resolved on October 17, 2026 after the Mode 2 offset fix.
   ER-07 was confirmed resolved in the complete Boss 1-4 fight on October 17,
   2026 using the continuously enabled `DelayBG2-test` build. ER-08, a line
-  above the text box in the Bonus stage, remains open. The previously resolved
+  above the text box in the Bonus stage, remains open. ER-12 was resolved in
+  the tested castle 1-4 rotating-bar scenario using `ER12-BG3Pair-test`; the
+  user also switched renderers at the bar and during the boss fight without
+  reproducing ER-07. Both adjustments remain explicit build options. The previously resolved
   gameplay background issue and title-screen horizon were renumbered ER-10 and
   ER-11 to keep these new IDs unique.
 - The user also tested the emulator named **Bnes** for comparison. No version or
   configuration for that emulator, identified reference/recomp frame pairs, or
-  equivalent frame numbers were provided. Therefore, the captures are not
-  attributed to either emulator here, and no difference from the original is
-  claimed as proven. Preserve the reported spelling; do not assume another core.
+  equivalent frame numbers were provided. The original supplied screenshots therefore do not establish a
+  frame-matched reference comparison. Later native capture folders identify
+  recomp builds and effective renderers explicitly; no synchronized Bnes
+  comparison is claimed. Preserve the reported spelling; do not assume another core.
 - Static frames show appearance but do not prove intermittency, duration, or
   temporal sequence. Those aspects are recorded as user reports.
 - ER-10 and ER-11 are resolved in their previously tested scenarios. Their
@@ -48,11 +52,12 @@ necessarily the video's chronological order.
 | ER-04 | Interactive objects (including stationary enemies and the pushable ball) shift horizontally relative to the scenery | User-validated World 1-2 block and World 1 ball scenarios after raster-history fixes | Resolved in the tested scenarios on October 15, 2026; commits `7264416`, `97111a4` |
 | ER-05 | Text box appears too early or opens in the wrong sequence | Continuous capture with per-frame input; user repeated text-box openings after the HDMA source-history fix and confirmed the defect no longer occurs | Resolved in the tested scenario on October 16, 2026 |
 | ER-06 | Flicker when returning to the level selector after completing a level | Before/after captures and user repetition of the trigger | Resolved in the tested scenario on October 15, 2026; commit `493f08b` |
-| ER-07 | Extra lines outside the Boss 1-4 during growth, combat and shrinking | Per-line captures and user confirmation after playing the complete fight with continuous BG2 VOFS delay | Resolved in the tested Boss 1-4 fight on October 17, 2026, in `DelayBG2-test`; normal-build default remains unchanged |
+| ER-07 | Extra lines outside the Boss 1-4 during growth, combat and shrinking | Per-line captures, complete-fight validation with continuous BG2 VOFS delay, and a later user boss playtest with renderer switching in BG3Pair | Resolved in the tested Boss 1-4 fights on October 17, 2026; no recurrence reported in `ER12-BG3Pair-test`; normal-build default remains unchanged |
 | ER-08 | Line above the text box in the Bonus stage | User report; no capture or exact stage/message supplied yet | Open; reproduction details pending |
 | ER-09 | Stage 1-7 background and walkable terrain render at incorrect positions | Images 14–15; before/after captures and same-run B-to-A comparison; user confirms normal progression after the Mode 2 offset fix | Resolved in the tested Stage 1-7 scenario on October 17, 2026 |
 | ER-10 | Background corruption while moving the World 1-3 secret-passage weight bar and while a door descends in the first castle | Images 8–12 and user-confirmed post-fix captures; originally tracked as ER-07 | Resolved in both tested scenarios on October 16, 2026; one-line BG3 HDMA VOFS timing correction |
 | ER-11 | Fixed bright horizontal line behind the title-screen mountains | Image 5 documents the original report; image 13 shows the current title screen without the reported line; originally tracked as ER-08 | Resolved in the title-screen scenario shown on October 16, 2026 |
+| ER-12 | Pixels extend beyond the rotating pink bar near lava in castle 1-4 | Before/after native captures, effective per-line scroll, and user confirmation after switching renderers and continuing to the boss | Resolved in the tested bar scenario on October 17, 2026, in `ER12-BG3Pair-test`; paired BG3 delay remains opt-in |
 
 ## ER-01 — dark band in the intro sky
 
@@ -459,6 +464,13 @@ reported no corrupted lines throughout the fight. This closes ER-07 in that
 tested scenario. This final validation is a user playtest report, not a new
 recording of the entire fight or a frame-matched hardware/reference comparison.
 
+**Later regression check on October 17, 2026:** during ER-12 validation with
+`ER12-BG3Pair-test`, the user reached and fought this boss, switched renderer
+during combat, and reported no recurrence of ER-07. This is a separate user
+playtest report without a new boss capture. The build preserves continuous BG2
+VOFS delay and additionally pairs BG3 HOFS with its existing VOFS delay; see
+ER-12 for the executable hash and scope. The normal-build defaults remain unchanged.
+
 **Adjustment:** `src/game_rtl.c` passes deferred-VOFS mask `06` to
 `snes_beam_frame_driver_draw_ppu_frame_observed_deferred_vofs`: BG2 (`02`)
 is added to the existing BG3 (`04`) policy previously validated for ER-10.
@@ -623,6 +635,99 @@ without noticing further problems. ER-09 is **resolved in the tested Stage 1-7
 scenario on October 17, 2026**. The ten-second capture and the longer user
 playtest are separate evidence; neither certifies every stage or effect.
 
+## ER-12 — pixels extending beyond the rotating bar — resolved in the tested scenario
+
+**Original report on October 17, 2026:** pixels extend sideways beyond the
+rotating pink bar near the lava in castle 1-4. Both extremities are affected.
+The user clarified that this is the pink rotating bar, not the nearby walkway
+of small orange blocks. The report concerns appearance; the user noticed no
+change in gameplay behavior. The same part of the same ROM did not show the
+artifact in Bnes according to the user. Bnes version/settings and synchronized
+reference images remain unavailable.
+
+**Before-fix evidence:** preserve both complete folders:
+
+- `G:\x2\yoshi-render-ER12-BarraLava-Padrao-20261017-201855-3445ad22`:
+  300 consecutive frames, 5454–5753, all 67,200 valid lines in renderer B.
+  Frames 5680–5691 show irregular left-end protrusions; frames 5718–5729
+  document the right end. All native image-line hashes match the TSV.
+- `G:\x2\yoshi-render-ER12-BarraLava-UmaTrocaR-20261017-203333-410ca730`:
+  299 consecutive frames, 5812–6110. Actual renderer B covers 5812–5896;
+  A covers 5897–6110, following the keyboard R press associated with 5897.
+  The final bar segment, including the conspicuous extension in 6064–6065
+  and the following irregular contour in 6066–6075, is in A. The run label
+  and the user's initial B attribution do not override `row.renderer`.
+
+Both used `Yoshi's Island recomp.ER12-DelayBG2-test.exe`, SHA-256
+`C055E1FEAC02D4BA6B015E8E5EB4E2847E15FCEAFD1F53F2D21175C35ABABC91`,
+with continuous BG2/BG3 VOFS policy `06`. Neither occurrence is explained by
+an experiment expiring. The native images already contain the artifact;
+GPU presentation is not required to produce it. No missing images, duplicate
+checked frame/line records, frame-cap drops, export I/O failures or recorded
+PPU/DMA/probe/memory-journal losses were found in these captures. Recent GSU
+job retention is bounded, with eviction completeness unknown.
+
+**Mechanism and correction:** the existing BG3 policy deferred HDMA VOFS by
+one line while consuming the current slot's HOFS. This combined coordinates
+from different transfer slots during rotation. The new opt-in driver policy
+also defers HOFS when the same HDMA slot writes both BG3 axes and BG3 VOFS is
+already deferred. The line consumes the preceding pair together; afterward,
+the real HDMA scroll results are restored for subsequent lines. `RenderEnd`
+continues restoring guest state. The existing vertical BG2/BG3 mask remains
+`06`; paired horizontal policy is `04`, with actual application recorded per
+line. No PPU drawing algorithm, GSU execution or input behavior was changed.
+The before/after evidence strongly supports mixed scroll phases as the cause
+in this tested bar effect, without establishing a universal HDMA timing rule.
+
+**Post-fix capture:**
+`G:\x2\yoshi-render-ER12-BG3Pair-BarraLava-Padrao-20261017-204258-13658d49`
+contains 300 consecutive frames, 5243–5542, all in B/Mode 1 without mosaic.
+The 67,200 native line hashes match the TSV. Checked frame/line keys agree,
+with no missing images, duplicates, frame-cap drops, export failures or
+recorded PPU/DMA/probe/memory-journal losses. Vertical policy stays `06`.
+Horizontal policy is `04`, applied on 62,700 lines; on every applied line,
+both consumed BG3 axes match the preceding HDMA slot. The remaining 4,500
+lines record no horizontal application, as required by the conditional policy.
+
+Old/new frame pairs 5682/5453, 5685/5459, 5691/5469 and 5720/5515 share
+identical BG3 vertical sequences across all 223 comparable lines. Enlarged
+native-image comparisons show the former left-end protrusions absent in the
+paired variant. These are equivalent vertical-scroll states, not identical
+complete guest states: camera position, objects and some VRAM-page hashes
+differ. The capture does not include final GPU presentation or a synchronized
+Bnes reference.
+
+**User validation and resolution:** after the successful capture, the user
+switched renderer at the bar and did not see the artifact. The user then
+reached and fought Boss 1-4, switching renderer during the fight, and reported
+that ER-07 did not return. This closes ER-12 in the tested bar scenario on
+October 17, 2026, with user-reported validation under both renderers and a
+follow-up ER-07 regression check. That later playtest is separate from the
+five-second B capture; no telemetry for the renderer switches or boss fight
+was supplied. It does not separately revalidate the original ER-10 passage
+and door scenarios or certify every game effect.
+
+**Validated build and implementation scope:**
+`G:\x2\Yoshi's Island recomp.ER12-BG3Pair-test.exe`, SHA-256
+`B24245847FE94270846527F9EBE34678F43B0546C729C1BF4A7546DA46AFF3A1`.
+Release compile/link, binary markers and deployed hashes were verified.
+`YI_ER12_BG3_PAIR_TEST` defaults to `OFF` and requires `YI_DELAY_BG2_TEST=ON`
+for this variant. Both adjustments remain continuously active in this named
+build, independent of capture requests. The normal-build defaults were not
+changed, and the result is not yet promoted to them. No new standalone
+regression test suite was run for this change.
+
+Framework implementation: commit `d01b7d1`,
+`modules/snesrecomp/runner/src/beam_frame_driver.c` and `.h`; existing draw
+entry points retain their previous policy. Port/build
+integration: `src/game_rtl.c` and `CMakeLists.txt`. Capture support:
+`src/render_capture.h`, `scripts/capture-render-er12.ps1` and
+`scripts/ER12-capture.md`, using five seconds of preparation and five seconds
+of recording. `phase_h_line` distinguishes requested policy from actual
+application; `video_state` records the scroll consumed by each line.
+Preserve every full capture folder and the earlier executables. ER-07 and
+ER-10 retain their separate histories and previous validated scenarios.
+
 ## Suggested investigation order
 
 1. **ER-07:** resolved in the complete user-tested Boss 1-4 fight with
@@ -632,8 +737,11 @@ playtest are separate evidence; neither certifies every stage or effect.
    displaced-terrain artifact returns, preserving the before/after evidence.
 4. **ER-10 and ER-11:** previously resolved in the tested scenarios; reopen
    only if either reported artifact returns.
+5. **ER-12:** resolved in the user-tested rotating-bar scenario with
+   `ER12-BG3Pair-test`; reopen only if its extensions return, recording the
+   effective paired-scroll policy and renderer.
 
-ER-01 through ER-07 and ER-09 through ER-11 are resolved in the user-tested
+ER-01 through ER-07 and ER-09 through ER-12 are resolved in the user-tested
 scenarios. Reopen a resolved item only if its reported artifact returns, and
 retain the prior captures for comparison.
 
@@ -813,16 +921,22 @@ inspection, and visual test separately; one does not replace the others.
 ### 7. Resumption point
 
 ER-08 remains open and is deferred to a later session at the user's request.
+ER-12 is resolved in the rotating-bar scenario tested with `ER12-BG3Pair-test`;
+the user also switched renderer at the bar and during Boss 1-4 without an
+ER-07 recurrence. Paired BG3 delay remains an explicit build option, not the
+normal default.
 ER-07 is resolved in the complete Boss 1-4 fight tested with `DelayBG2-test`;
 continuous BG2 delay remains an explicit build option, not the normal default.
 ER-09 was resolved in the tested Stage 1-7 scenario on October 17, 2026.
-ER-01 through ER-07 and ER-09 through ER-11 are resolved in the scenarios the
+ER-01 through ER-07 and ER-09 through ER-12 are resolved in the scenarios the
 user tested; resume a resolved item only if its artifact returns.
 
 ## History
 
 | Date | Record |
 | --- | --- |
+| October 17, 2026 | ER-12 resolved in the tested rotating-bar scenario with `ER12-BG3Pair-test` (SHA-256 `B24245847FE94270846527F9EBE34678F43B0546C729C1BF4A7546DA46AFF3A1`). Paired BG3 HDMA HOFS/VOFS consumption removes the captured lateral protrusions while preserving vertical policy `06`. Post-fix capture: 300 consecutive B frames, 5243–5542; 62,700 lines confirm both axes consumed from the previous slot. The user subsequently switched renderers at the bar and during Boss 1-4 without reproducing ER-12 or ER-07. Both build options remain opt-in; no promotion to normal defaults. |
+| October 17, 2026 | Added ER-12: the user reports that some pixels stretch sideways from a bar when it is almost touching the lava in castle 1-4. No images or telemetry supplied; no cause assigned. Recorded as a separate open issue for later investigation, without reopening ER-07 or ER-10. |
 | October 17, 2026 | ER-07 resolved in the complete user-tested Boss 1-4 fight with `Yoshi's Island recomp.DelayBG2-test.exe` (SHA-256 `446F68D552A15BB5B7EE72F59C59C4CD3B201515C28364A499AC5BEC9AB8C29D`). Continuous one-line BG2 HDMA VOFS consumption delay adds BG2 to the preserved BG3 policy (mask `06`). Timed captures validated the active policy and growth improvement; the final complete-fight confirmation is a user report. Previously observed returns happened outside the active capture window. `YI_DELAY_BG2_TEST` defaults to `OFF`, so the validated behavior remains specific to the named test build. Further issue investigations are deferred. |
 | October 17, 2026 | ER-09 resolved in the tested Stage 1-7 scenario after correcting renderer B Mode 2 offset-table row/column selection and vertical offsets. Post-fix capture `G:\x2\yoshi-render-ER09-Placa-Padrao-20261017-104621-232a4556`: 600 consecutive frames (2125–2724), all valid lines in B/Mode 2, no recorded losses or export failures. The user confirms complete disappearance and several additional minutes of progression without noticed problems. Synthetic regressions and Release build passed; see ER-09 for scope, executable hash and preserved evidence. |
 | October 16, 2026 | The user reported three new rendering problems: sprite-side corruption during the Boss 1-4 zoom (ER-07), a line above the Bonus-stage text box (ER-08), and a severely incorrect Stage 1-7 background that prevents progress (ER-09). No new captures or screenshots were supplied. To keep IDs unique, the previously resolved secret-passage/first-castle background issue was renumbered ER-10, and the previously resolved title-screen horizon was renumbered ER-11. Earlier history and capture names retain their original IDs. |
