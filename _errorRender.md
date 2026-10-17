@@ -20,13 +20,12 @@ necessarily the video's chronological order.
 - That run's report recorded 4,807 simulations and presentations in
   approximately 80.35 seconds. Detailed telemetry covers only the configured
   interval, not all 80 seconds.
-- ER-01 through ER-07 are resolved in the scenarios the user tested and
-  reported below. ER-07 covered background corruption while moving the weight
-  bar in World 1-3's secret passage and while a door descended in the first
-  castle. The same BG3 HDMA vertical-scroll timing correction resolved both
-  tested scenes; this does not by itself prove their underlying cause is
-  identical. The former ER-07, the title-screen horizon line, is now ER-08 and
-  is resolved in the scenario shown in image 13.
+- ER-01 through ER-06 and ER-09 are resolved in the scenarios the user tested.
+  ER-09 was confirmed resolved on October 17, 2026 after the Mode 2 offset fix.
+  Two reports remain open: ER-07, sprite-side corruption during the Boss 1-4
+  zoom; and ER-08, a line above the text box in the Bonus stage. The previously resolved
+  gameplay background issue and title-screen horizon were renumbered ER-10 and
+  ER-11 to keep these new IDs unique.
 - The user also tested the emulator named **Bnes** for comparison. No version or
   configuration for that emulator, identified reference/recomp frame pairs, or
   equivalent frame numbers were provided. Therefore, the captures are not
@@ -34,9 +33,8 @@ necessarily the video's chronological order.
   claimed as proven. Preserve the reported spelling; do not assume another core.
 - Static frames show appearance but do not prove intermittency, duration, or
   temporal sequence. Those aspects are recorded as user reports.
-- ER-01 through ER-08 have user-reported fixes in their tested scenarios.
-  ER-07's two scenes were both rechecked with the candidate correction and the
-  reported corruption disappeared. A shared underlying cause remains unproven.
+- ER-10 and ER-11 are resolved in their previously tested scenarios. Their
+  original records and capture filenames retain the IDs used at the time.
   Super FX is part of the execution path, not an automatic explanation.
 
 ## Tracking list
@@ -49,8 +47,11 @@ necessarily the video's chronological order.
 | ER-04 | Interactive objects (including stationary enemies and the pushable ball) shift horizontally relative to the scenery | User-validated World 1-2 block and World 1 ball scenarios after raster-history fixes | Resolved in the tested scenarios on October 15, 2026; commits `7264416`, `97111a4` |
 | ER-05 | Text box appears too early or opens in the wrong sequence | Continuous capture with per-frame input; user repeated text-box openings after the HDMA source-history fix and confirmed the defect no longer occurs | Resolved in the tested scenario on October 16, 2026 |
 | ER-06 | Flicker when returning to the level selector after completing a level | Before/after captures and user repetition of the trigger | Resolved in the tested scenario on October 15, 2026; commit `493f08b` |
-| ER-07 | Background corruption while moving the World 1-3 secret-passage weight bar and while a door descends in the first castle | Images 8–12; user-confirmed post-fix runs and complete B-renderer captures in both scenes | Resolved in both tested scenarios on October 16, 2026; one-line BG3 HDMA VOFS timing correction |
-| ER-08 | Fixed bright horizontal line behind the title-screen mountains | Image 5 documents the original report; image 13 shows the current title screen without the reported line | Resolved in the title-screen scenario shown on October 16, 2026 |
+| ER-07 | Sprite corruption along the sides during the zoom in the Boss 1-4 scene; rendering error outside the boss | User report; no captures or exact zoom sequence supplied yet | Open; severity and reproduction details pending |
+| ER-08 | Line above the text box in the Bonus stage | User report; no capture or exact stage/message supplied yet | Open; reproduction details pending |
+| ER-09 | Stage 1-7 background and walkable terrain render at incorrect positions | Images 14–15; before/after captures and same-run B-to-A comparison; user confirms normal progression after the Mode 2 offset fix | Resolved in the tested Stage 1-7 scenario on October 17, 2026 |
+| ER-10 | Background corruption while moving the World 1-3 secret-passage weight bar and while a door descends in the first castle | Images 8–12 and user-confirmed post-fix captures; originally tracked as ER-07 | Resolved in both tested scenarios on October 16, 2026; one-line BG3 HDMA VOFS timing correction |
+| ER-11 | Fixed bright horizontal line behind the title-screen mountains | Image 5 documents the original report; image 13 shows the current title screen without the reported line; originally tracked as ER-08 | Resolved in the title-screen scenario shown on October 16, 2026 |
 
 ## ER-01 — dark band in the intro sky
 
@@ -107,15 +108,16 @@ additional fragmentation compared with the reference.
 
 ![Image 4 — block fragmentation across the scene](<_errorRender/imagem04_YoshisIsland_errorRender.png>)
 
-## ER-03 and ER-08 — two distinct lines on the title screen
+## ER-03 and ER-11 — two distinct lines on the title screen
 
 **ER-03, original observation:** a line of discrepant pixels appeared at the
 top edge of the game image. The user reported that it alternated with a normal
 line.
 
-**ER-08, original observation (formerly ER-07):** a thin bright/yellowish line
+**ER-11, original observation (formerly ER-08):** a thin bright/yellowish line
 crossed the background at the horizon, behind the mountains. The original
-report described it as fixed and non-flickering.
+report described it as fixed and non-flickering. Its first tracking ID was
+ER-07 before the gameplay background issue was assigned that ID.
 
 Treat these as separate cases: their different positions, persistence, and
 appearance do not justify assuming a single cause.
@@ -123,17 +125,17 @@ appearance do not justify assuming a single cause.
 **ER-03 correction and validation:** the user confirmed that the title-screen
 first-line color artifact was corrected in the tested scenario. The associated
 change moved HDMA processing before scanline rendering and removed the separate
-first-line HDMA priming call. This change did not resolve ER-05; the text-box
-issue remains a separate open case.
+first-line HDMA priming call. At that time, ER-05 remained a separate issue;
+it was resolved in the tested opening scenario on October 16, 2026.
 
 **Implementation:** `modules/snesrecomp/runner/src/beam_frame_driver.c`;
 framework commit `cc8c0ae` (`fix: apply HDMA before scanline rendering`), pinned
 by project commit `46fc4fa` (`chore: pin HDMA scanline fix`).
 
-**ER-08 validation on October 16, 2026:** the user reports that the title-screen
+**ER-11 validation on October 16, 2026:** the user reports that the title-screen
 corruption is no longer present and supplied a new screenshot. The visible
 horizon and surrounding title-screen background in image 13 show no obvious
-bright line matching the original report. ER-08 is resolved in this tested
+bright line matching the original report. ER-11 is resolved in this tested
 title-screen scenario. This is a user-reported visual check supported by one
 static screenshot; no reference comparison or temporal capture was supplied.
 
@@ -141,7 +143,7 @@ static screenshot; no reference comparison or temporal capture was supplied.
 
 ![Image 13 — title screen without the previously reported bright horizon line](<_errorRender/imagem13_ER08_tela_titulo_sem_corrupcao.png>)
 
-## ER-07 — background corruption during moving scenery and doors
+## ER-10 — background corruption during moving scenery and doors
 
 **Scope:** the background corruption reported in two situations: Yoshi moving
 the weight bar in the World 1-3 secret passage, and a door descending in the
@@ -157,8 +159,8 @@ which layer, tiles, or transfer produced those pixels.
 **Castle, images 10–12:** image 10 shows the first door in its normal scene.
 Images 11–12 show a door/opening transition and a descending door with large
 background regions replaced by flat brown areas or displaced scenery. The
-similarity to the passage corruption motivates testing the two scenes together
-under ER-07, while leaving their relationship unverified.
+similarity to the passage corruption motivated testing the two scenes together
+under the original ER-07, while leaving their relationship unverified.
 
 **User report:** the weight-bar corruption occurs while moving it. In the
 castle, some doors are interactive and fall toward the player; the user reports
@@ -182,9 +184,12 @@ is unavailable and does not provide a reference comparison; the user's visual
 confirmation remains the validation for the displayed result. The exact castle
 room and door were not recorded.
 
-These results resolve ER-07 in the two tested scenarios. They support the same
+These results resolve ER-10 in the two tested scenarios. They support the same
 correction for both scenes, while the common underlying cause remains a
 hypothesis.
+
+The original screenshots and capture folders retain the ER-07 label used
+before this issue was renumbered ER-10.
 
 ![Image 8 — background corruption while moving the weight bar in the secret passage](<_errorRender/imagem08_ER07_passagem_secreta_075642.png>)
 
@@ -434,8 +439,8 @@ Validated executable, SHA-256:
 `E8C4ABA393A42E315F3A09CB9BE176525061328F273C86986F212D769BBF6EE8`.
 Also preserve the earlier captures in `G:\x2`, including
 `yoshi-render-20261015-093437-81dd767d`. At the time, the ER-06 validation did
-not resolve ER-01, ER-02, ER-05, or the then-numbered horizon issue (now ER-08),
-or certify every game scene and configuration. ER-01, ER-02, and ER-05 were+subsequently reported fixed in their tested scenarios.
+not resolve ER-01, ER-02, ER-05, or the then-numbered horizon issue (now ER-11),
+or certify every game scene and configuration. ER-01, ER-02, and ER-05 were subsequently reported fixed in their tested scenarios.
 
 ## Gameplay observations and limits on generalization
 
@@ -445,15 +450,103 @@ as comparison controls; do not conclude that every message, stage, or pause
 state has been validated. ER-05's visual scope is only the text-box transitions
 in the opening sequence observed by the user.
 
+## ER-07 — sprite-side corruption during the Boss 1-4 zoom
+
+**User report:** in the Boss 1-4 scene, a rendering error appears outside the
+boss. When the scene zooms, the sprite becomes corrupted along its sides.
+
+**Evidence and status:** report only. No screenshots, capture sequence,
+renderer identity, exact zoom trigger, or affected sprite identity have been
+provided yet. Cause and scope are undetermined.
+
+## ER-08 — line above the Bonus-stage text box
+
+**User report:** a line appears above the text box during the Bonus stage.
+
+**Evidence and status:** report only. No screenshot, message identity, renderer,
+or sequence timing has been provided yet. The line's appearance and duration
+are not documented.
+
+## ER-09 — Stage 1-7 background prevents progress — resolved
+
+**Original report:** Stage 1-7 rendered the walkable scenery incorrectly,
+preventing progress. Images 14–15 show the forest/arrow-sign area with terrain
+displaced relative to Yoshi. Static screenshots alone did not establish the
+layer, renderer, camera behavior or underlying cause.
+
+![Image 14 — original Stage 1-7 report](<_errorRender/imagem14_ER-09-errorRender.png>)
+
+![Image 15 — terrain displaced relative to Yoshi](<_errorRender/imagem15_ER-09-errorRender.png>)
+
+**Isolation on October 17, 2026:** the separate captures recorded renderer B/new
+without pressing keyboard R and A/legacy after one R press. The stronger
+same-run comparison is preserved in
+`G:\x2\yoshi-render-ER09-Placa-Padrao-20261017-103711-40d92b07`.
+It contains 600 consecutive frames (2407–3006): B on frames 2407–2726 and A on
+2727–3006. The keyboard R press is associated with frame 2727. Across frames
+2726/B and 2727/A, all 224 lines have identical captured PPU registers and
+matching hashes for all 16 consumed-VRAM pages, but 208 output-line hashes
+change and the terrain immediately changes position. Logical movement inputs
+are zero around that transition, although other parts of the capture contain
+left/right masks. This isolates a renderer-dependent interpretation rather
+than proving a guest camera or collision failure. Hashes are not raw-memory
+comparisons; OAM/CGRAM equality was not established by this comparison.
+
+**Correction:** the captured scene uses Mode 2 (`BGMODE=$22`), with BG3 acting
+as an offset table. Renderer B's `PpuDrawBackground_4bpp_opt` selected the
+horizontal table row using BG3VOFS minus one and the vertical row eight pixels
+later. With the recorded BG3VOFS=128, B selected rows 15/16 whereas the legacy
+path selected 16/17. The correction uses BG3VOFS and BG3VOFS+8, selects the
+table column from the source tile column including fine horizontal scroll,
+and applies the masked vertical offset without the extra +1. It does not
+change GSU execution, guest camera/physics, raster memory history, HDMA order,
+or the existing selective BG3VOFS timing adjustment.
+
+**Files changed for the correction, under `modules/snesrecomp/`:**
+`runner/src/snes/ppu.c` and `tests/ppu/ppu_sprite_limit_test.c`.
+Synthetic Mode 2 cases cover both backgrounds, fine scroll, distinct
+offset-table rows and 8/16-pixel tiles. The expanded test fails against the
+pre-fix PPU and passes with the correction. Raster-journal, world-mirror,
+elastic-band and Mode 7 checks also pass. These are synthetic checks, not
+proof of full-game compatibility. The Release game build succeeded.
+The passive collection is implemented by `src/render_capture.h`,
+`scripts/capture-render-er09.ps1` and `scripts/ER09-capture.md`; it records the
+actual renderer without forcing a mode or injecting inputs.
+
+**Post-fix capture:**
+`G:\x2\yoshi-render-ER09-Placa-Padrao-20261017-104621-232a4556`
+contains 600 consecutive frames (2125–2724), all 134,400 valid lines using
+renderer B and Mode 2. Frame/line keys match across image-state and consumed
+memory records; no duplicate records, missing native images, frame-cap drops,
+reported PPU/DMA/probe/journal losses, or export I/O failures were found.
+Sampled native frames throughout the sequence show coherent ground and ramps
+without the previously observed large terrain displacement. Presentation is
+not captured (`presentation=unavailable`), and no frame-matched reference
+emulator comparison was supplied. The Mode 1-only `bg3_sample` is invalid in
+this Mode 2 scene by design; its row count is not evidence of sampled BG3 pixels.
+
+The tested executable is `G:\x2\Yoshi's Island recomp.ER09-candidate.exe`,
+SHA-256 `D79638A577BDD2A33B1BDACE3225C442BCA566F52BDD631A29627B418E5D4ED6`.
+The previous instrumented EXE and earlier capture folders remain preserved.
+
+**User validation and status:** the user confirmed that the problem disappeared
+completely and played several additional minutes, advancing through the game
+without noticing further problems. ER-09 is **resolved in the tested Stage 1-7
+scenario on October 17, 2026**. The ten-second capture and the longer user
+playtest are separate evidence; neither certifies every stage or effect.
+
 ## Suggested investigation order
 
-1. **ER-07:** resolved in the tested secret-passage and first-castle door
-   scenarios. Reopen if the reported corruption returns.
-2. **ER-08:** resolved in the title-screen scenario shown. Reopen only if the
-   horizon line returns.
+1. **ER-07:** record the Boss 1-4 zoom and affected sprite.
+2. **ER-08:** record the Bonus-stage text box and the line above it.
+3. **ER-09:** resolved in the tested Stage 1-7 scenario; reopen only if the
+   displaced-terrain artifact returns, preserving the before/after evidence.
+4. **ER-10 and ER-11:** previously resolved in the tested scenarios; reopen
+   only if either reported artifact returns.
 
-ER-01 through ER-06 are resolved in the user-tested scenarios. Reopen one only
-if its reported artifact returns, and retain the prior captures for comparison.
+ER-01 through ER-06 and ER-09 through ER-11 are resolved in the user-tested
+scenarios. Reopen a resolved item only if its reported artifact returns, and
+retain the prior captures for comparison.
 
 ## Minimum data for each new capture
 
@@ -590,14 +683,14 @@ for passive capture.
 2. **Title screen — ER-03 regression check:** the tested scenario is resolved.
    Repeat the native/presented first-line comparison only if the artifact
    returns.
-3. **Gameplay corruption — ER-07:** the weight-bar movement and first-castle
-   door descent are resolved in the tested scenarios. Capture again only if
-   either artifact returns.
-4. **Horizon — ER-08:** the user reports it resolved in the current title
-   screen. Check again only if the line returns.
-5. **Resolved issues ER-01 through ER-06:** repeat their tested scenario only
-   if an artifact returns.
-6. **Gameplay observation:** play normally while recording scene and inputs;
+3. **Boss 1-4 — ER-07:** capture the zoom and sprite-side corruption when
+   reproducing it.
+4. **Bonus stage — ER-08:** capture the text box and the line above it.
+5. **Stage 1-7 — ER-09:** resolved on October 17, 2026; repeat only if the
+   displaced-terrain artifact returns.
+6. **Resolved issues ER-01 through ER-06 and ER-09 through ER-11:** repeat a
+   tested scenario only if its artifact returns.
+7. **Gameplay observation:** play normally while recording scene and inputs;
    check that blackouts do not return and that input, audio, text boxes, and
    pause have no regressions. Not observing a defect in one session does not
    validate the entire game.
@@ -630,14 +723,17 @@ inspection, and visual test separately; one does not replace the others.
 
 ### 7. Resumption point
 
-There is no open rendering report with a pending capture. ER-01 through ER-08
-are resolved in the scenarios the user tested; resume an item only if its
-artifact returns.
+ER-07 and ER-08 remain open reports from gameplay. ER-09 was resolved in the
+tested Stage 1-7 scenario on October 17, 2026. ER-01 through ER-06 and ER-09
+through ER-11 are resolved in the scenarios the user tested; resume a resolved
+item only if its artifact returns.
 
 ## History
 
 | Date | Record |
 | --- | --- |
+| October 17, 2026 | ER-09 resolved in the tested Stage 1-7 scenario after correcting renderer B Mode 2 offset-table row/column selection and vertical offsets. Post-fix capture `G:\x2\yoshi-render-ER09-Placa-Padrao-20261017-104621-232a4556`: 600 consecutive frames (2125–2724), all valid lines in B/Mode 2, no recorded losses or export failures. The user confirms complete disappearance and several additional minutes of progression without noticed problems. Synthetic regressions and Release build passed; see ER-09 for scope, executable hash and preserved evidence. |
+| October 16, 2026 | The user reported three new rendering problems: sprite-side corruption during the Boss 1-4 zoom (ER-07), a line above the Bonus-stage text box (ER-08), and a severely incorrect Stage 1-7 background that prevents progress (ER-09). No new captures or screenshots were supplied. To keep IDs unique, the previously resolved secret-passage/first-castle background issue was renumbered ER-10, and the previously resolved title-screen horizon was renumbered ER-11. Earlier history and capture names retain their original IDs. |
 | October 16, 2026 | ER-07 resolved in both user-tested scenes with the one-line BG3 HDMA VOFS timing correction. The user reports the passage weight-bar and first-castle door corruption disappeared completely. Follow-up captures: `G:\x2\yoshi-render-ER07-Passagem-B-20261016-094631-31dbccd7` (600 consecutive frames) and `G:\x2\yoshi-render-ER07-Castelo-B-20261016-094740-bc639c63` (599 consecutive frames). Renderer B was effective for every valid line; no invalid lines, frame-cap drops, or export I/O failures were found, and visual inspection found no remaining reported corruption. Executable SHA-256 `24F3F765795EF31209DEC25F5CAFBD6DE051D2EA201981BD2F062208CF7DA12E`. The same fix works in both tests, but a common underlying cause is not proven; castle room/door and reference comparison remain undocumented. |
 | October 16, 2026 | User reports ER-01, ER-02 and ER-03 resolved during opening/title-screen tests; together with prior confirmations, ER-01 through ER-06 are resolved in the tested scenarios. Added ER-07 for similar background corruption during the World 1-3 secret-passage weight-bar movement and descending first-castle doors; shared cause remains a hypothesis. Preserved the former title-screen horizon ER-07 as ER-08 and saved its five screenshots under `_errorRender/`. |
 | October 16, 2026 | ER-08 resolved in the title-screen scenario shown: the user reports the bright horizon line is no longer present and supplied image 13. Status is limited to the shown scenario; no reference comparison or temporal capture was provided. |

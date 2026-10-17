@@ -158,6 +158,7 @@ static uint64_t rc_capture_start_counter;
 static uint64_t rc_capture_start_utc_ms;
 static uint64_t rc_requested_deadline_utc;
 static SDL_atomic_t rc_frame_cap_drops;
+static unsigned rc_er09_probe; /* passive; never selects a renderer */
 static int rc_requested_renderer = -1; /* host-only capture override; no guest input */
 static unsigned rc_box_enabled, rc_box_x, rc_box_y, rc_box_w, rc_box_h;
 static uint64_t rc_boundary_serial; /* observer notifications, not guest state */
@@ -203,7 +204,7 @@ static const char *rc_attach_request(void) {
               rc_timed_capture_ms=RC_TIMED_CAPTURE_MS; rc_timed_long_er05=0;
           }
       } }
-    rc_requested_renderer=-1;
+    rc_requested_renderer=-1; rc_er09_probe=0;
     rc_box_enabled=rc_box_x=rc_box_y=rc_box_w=rc_box_h=0;
     { char roi[96]={0}; unsigned x,y,w,h; int renderer;
       if (fgets(roi,sizeof(roi),request) &&
@@ -212,6 +213,8 @@ static const char *rc_attach_request(void) {
           rc_box_enabled=1; rc_box_x=x; rc_box_y=y; rc_box_w=w; rc_box_h=h;
       } else if (sscanf(roi,"renderer %d",&renderer)==1 && (renderer==0 || renderer==1)) {
           rc_requested_renderer=renderer;
+      } else if (!strncmp(roi,"er09 passive",12)) {
+          rc_er09_probe=1;
       } }
     fclose(request);
     rc_attached_dir[strcspn(rc_attached_dir, "\r\n")] = 0;
@@ -398,7 +401,7 @@ static void rc_begin(void) {
             ppu_set_display_observer(trace_observe);
             ppu_set_raster_probe_observer(rc_probe);
             dma_set_trace_observer(rc_dma_trace);
-            rc_status("capture.armed", rc_timed_long_er05
+            rc_status("capture.armed", rc_er09_probe ? "yi-render-er09-passive-v1 preparation_seconds=5 capture_seconds=10 frame_cap=620 pre=0 renderer=unchanged\n" : rc_timed_long_er05
                 ? "yi-er07-bg3vofs-defer-v1 yi-render-vram-consumed-v1 yi-render-select-v1 yi-render-input-v1 yi-render-timed-window-v2 yi-render-timed-window-er05-10s-v1 preparation_seconds=5 capture_seconds=10 frame_cap=620 pre=0 memory_budget_mib=768\n"
                 : (rc_timed ? (rc_timed_prep_ms ? "yi-render-timed-window-v2 preparation_seconds=5 capture_seconds=2 frame_cap=360 pre=0\n" : "yi-render-timed-v1 seconds=5 frame_cap=360 pre=0\n") : "yi-render-attach-v1 pre=8 post=16 batch_cap=1\n"));
             fprintf(stderr, "YI capture: armed, %zu bytes, one batch\n", sizeof(RcFrame)*rc_capacity);
@@ -547,7 +550,7 @@ static void rc_row(const Ppu *p, unsigned line) {
     SuperFx *fx;
     if (!rc_current || !line || line > 224) return;
     r = &rc_current->line[line-1];
-    if(rc_requested_renderer>=0) rc_consumed_memory(p,line,r);
+    if(rc_requested_renderer>=0 || rc_er09_probe) rc_consumed_memory(p,line,r);
     r->renderer = (p->renderFlags & kPpuRenderFlags_NewRenderer) != 0;
     r->cpu = g_cpu.master_cycles; r->beam = g_snes->beamMasterLast;
     r->v = g_snes->vPos; r->h = g_snes->hPos;
@@ -597,9 +600,13 @@ static int SDLCALL rc_flush(void *unused) {
     fputs("# yi-render-dma-hdma-v1 events=guest_writes_and_hdma_init_before_after channel_state=metadata_only pending_init=global_mask line=0_based_cpu_minus1\n", f);
     fputs("# dma_event: frame cpu beam V H drawLine phase kind address value channel active_mask pending_init aBank aAdr bAdr size mode indirect indBank tableAdr repCount doTransfer terminated dmaActive fixed decrement fromB offIndex\n", f);
     fputs("# hdma_sample: frame y channel hdmaActive terminated tableAdr repCount doTransfer indirect bAdr mode size aBank aAdr indBank dmaActive fixed decrement fromB unusedBit offIndex pending_init\n", f);
-    fprintf(f,"# yi-render-vram-consumed-v1 enabled=%u sampling=after_runLine_before_RenderEnd hashes=FNV1a_16_pages_4096bytes bg3=mode1_native256_no_mosaic_before_windows_priority_math pixel0=transparent payload=none\n",rc_requested_renderer>=0);
+    fprintf(f,"# yi-render-vram-consumed-v1 enabled=%u sampling=after_runLine_before_RenderEnd hashes=FNV1a_16_pages_4096bytes bg3=mode1_native256_no_mosaic_before_windows_priority_math pixel0=transparent payload=none\n",rc_requested_renderer>=0 || rc_er09_probe);
     fputs("# consumed_vram: frame y recording_field consumed_field memory_count memory_dropped memory_next hdma_sources_valid external_vram write_count pointer increment increment_on_high remap hash_pages_0_to_15\n",f);
     fputs("# bg3_sample: frame y valid transparent color1 color2 color3 high_priority_nonzero fetch_hash\n",f);
+    if(rc_er09_probe) {
+        fputs("# yi-render-er09-passive-v1 renderer_selection=unchanged video_state=after_runLine camera_identity=unknown\n",f);
+        fputs("# video_state: frame y mode BGMODE MOSAIC TM TS TMW TSW CGWSEL CGADSUB BG1_h BG1_v BG1SC BG2_h BG2_v BG2SC BG3_h BG3_v BG3SC BG4_h BG4_v BG4SC; named_values; remaining_registers_in_row_regs64\n",f);
+    }
     fputs("# yi-er07-bg3vofs-defer-v1 candidate=1 scope=HDMA_BG3VOFS_only latency_lines=1 default_driver_unchanged validation=pending\n",f);
     fputs("# yi-render-ab-v1 hotkey=R row_renderer=0:legacy,1:new\n", f);
     fprintf(f,"# yi-render-input-v1 frequency=%llu clock=SDL_GetPerformanceCounter phase=before_guest same_frame_id_as_native r_cap=%u initial_R_state=unknown\n",(unsigned long long)SDL_GetPerformanceFrequency(),RC_INPUT_KEYS);
@@ -695,7 +702,24 @@ static int SDLCALL rc_flush(void *unused) {
                 (unsigned long long)r->gsu_clock,(unsigned long long)r->instructions,r->sfr,r->irq);
             for(i=0;i<sizeof(r->regs);i++) fprintf(f,"%02X",r->regs[i]);
             fprintf(f,"\t%u\n",r->renderer);
-            if(rc_requested_renderer>=0) {
+            if(rc_er09_probe) {
+                const uint8_t *s=r->regs;
+#define RC_ER09_OFF(member) (offsetof(Ppu,member)-offsetof(Ppu,inidisp))
+                fprintf(f,"video_state\t%u\t%u\tmode=%u\tBGMODE=%02X\tMOSAIC=%02X\tTM=%02X\tTS=%02X\tTMW=%02X\tTSW=%02X\tCGWSEL=%02X\tCGADSUB=%02X",id,y,
+                    s[RC_ER09_OFF(bgmode)]&7,s[RC_ER09_OFF(bgmode)],s[RC_ER09_OFF(mosaic)],
+                    s[RC_ER09_OFF(screenEnabled)],s[RC_ER09_OFF(screenEnabled)+1],
+                    s[RC_ER09_OFF(screenWindowed)],s[RC_ER09_OFF(screenWindowed)+1],
+                    s[RC_ER09_OFF(cgwsel)],s[RC_ER09_OFF(cgadsub)]);
+                for(i=0;i<4;i++) {
+                    uint16_t h,v;
+                    memcpy(&h,s+RC_ER09_OFF(hScroll)+2*i,sizeof(h));
+                    memcpy(&v,s+RC_ER09_OFF(vScroll)+2*i,sizeof(v));
+                    fprintf(f,"\tBG%u_h=%u\tBG%u_v=%u\tBG%uSC=%02X",i+1,(unsigned)h,i+1,(unsigned)v,i+1,s[RC_ER09_OFF(bgXsc)+i]);
+                }
+                fputc('\n',f);
+#undef RC_ER09_OFF
+            }
+            if(rc_requested_renderer>=0 || rc_er09_probe) {
                 PpuRasterMemoryProbe *m=&r->memory;
                 fprintf(f,"consumed_vram\t%u\t%u\t%llu\t%llu\t%u\t%u\t%u\t%u\t%u\t%u\t%u\t%u\t%u\t%u",id,y,
                     (unsigned long long)m->recording_field,(unsigned long long)m->consumed_field,
