@@ -1,0 +1,31 @@
+{
+  "$schema": "https://recomp.fyi/schema/v1.json",
+  "game": "Super Mario World 2: Yoshi's Island",
+  "wikidata": "Q1045765",
+  "system": "SNES",
+  "type": "recomp",
+  "project": "Super Mario World 2 - Yoshi's Island Recomp",
+  "status": "released",
+  "targets": [
+    "Windows"
+  ],
+  "toolchain": "snesrecomp",
+  "original": {
+    "region": "USA",
+    "serial": "SNS-YI-USA",
+    "sha1": "c807f2856f44fb84326fac5b462340dcdd0471f8"
+  },
+  "maintainers": [
+    {
+      "name": "guimaraf",
+      "link": "https://github.com/guimaraf"
+    }
+  ],
+  "links": [
+    {
+      "label": "GitHub",
+      "url": "https://github.com/guimaraf/yo-Island-snes-recomp"
+    }
+  ],
+  "notes": "Native static recompilation port of Super Mario World 2 - Yoshi's Island (USA) powered by the SNESRecomp framework."
+}
