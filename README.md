@@ -1,5 +1,7 @@
 # Super Mario World 2 - Yoshi's Island Recomp
 
+[![Verified developer on RecompStore](https://recompstore.com/assets/press/verified-dark.svg)](https://recompstore.com/dev/guimaraf)
+
 A native recompilation of **Super Mario World 2 - Yoshi's Island** (USA), built on
 [snesrecomp](https://github.com/RetroPortingToolKit/snesrecomp).
 
