@@ -29,6 +29,9 @@
 #include "recomp_launcher.h"
 #include "game_rtl.h"
 #include "snesrecomp_rom_identity.h"  /* generated from rom_identity.txt */
+#ifndef __ANDROID__
+#include "snesrecomp_codegen_host.h"
+#endif
 
 #ifndef __ANDROID__
 #define SDL_MAIN_HANDLED 1
@@ -45,7 +48,22 @@
 
 static void YoshiConfigureLauncher(struct RecompLauncherCGameInfo *info)
 {
-    if (info) info->has_run_ahead = 0;
+    if (!info) return;
+    info->has_run_ahead = 0;
+#ifndef __ANDROID__
+    if (!info->in_session) {
+        static const SnesrecompCodegenHostConfig config = {
+            .display_name = "Super Mario World 2 - Yoshi's Island",
+            .cmake_target = "SuperMarioWorld2YoshiSIslandSNESRecomp",
+            .exe_basename = YI_CODEGEN_EXE_NAME,
+            .snesrecomp_cli_relpath = YI_CODEGEN_CLI,
+            .expected_crc32 = SNESRECOMP_ROM_EXPECTED_CRC32,
+            .expected_sha256 = SNESRECOMP_ROM_EXPECTED_SHA256,
+            .cfg_roots = 1,
+        };
+        snesrecomp_codegen_host_apply(info, &config);
+    }
+#endif
 }
 
 static const SnesDesktopHostGame kGameHost = {

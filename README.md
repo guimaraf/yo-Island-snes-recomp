@@ -74,6 +74,47 @@ Either way the ROM is checked against the digests above before anything boots
 — a dump that could not have produced this build is refused at the door rather
 than mis-executing ten frames in.
 
+## RecompLauncher package (Windows x64)
+
+With Python 3.11 or newer and the RetComm Windows x64 `cmake-clang-v1`
+toolchain, run this from the repository root:
+
+```powershell
+python scripts/package_recomplauncher.py
+```
+
+Set `RETCOMM_TOOLCHAIN_DIR` to the extracted toolchain or pass
+`--toolchain <path>`. For 0.1.1 the script can use the 0.1.0 setup ZIP in
+`dist/` or `dist/recomplauncher/` as its source base. It applies the local
+setup host changes and `VERSION` before building a fresh host in a temporary
+directory without a ROM. It
+writes a separate ZIP and SHA-256 file to `dist/recomplauncher/` and preserves
+the original ZIP. Pass a compatible Windows x64 setup ZIP as the
+first argument, or use `--dependencies` to point to the shared directory
+containing SDL 3.4.10, Lua 5.4.9 and libjuice 1.7.2 sources.
+
+Play opens the game's own setup wizard. Choose your USA ROM there and run
+**Generate & rebuild** on the first install or when the wizard requests a
+rebuild after an update. The player's compiler and other build tool
+requirements are described in the setup pack's `README.txt`. ROM selection
+and settings stay in the game's wizard. Use an extracted copy in
+RecompLauncher Developer tools to test the first-time and subsequent launch
+flows before publishing the package.
+
+To slim a setup ZIP that has already been built for RecompLauncher, run:
+
+```powershell
+python scripts/package_recomplauncher.py --repack
+```
+
+This reads the ZIP in `dist/recomplauncher/` and writes a clean ZIP and
+SHA-256 file in `dist/recomplauncher-clean/` without compiling. Pass the
+original setup ZIP as a positional argument to use another copy. The
+output uses the name `islandSnesRecomp-<version>-windows-x64.zip`. The
+packager excludes the project's capture reports, development scripts and
+tools, and keeps the game's sources and the SDK modules that the wizard
+uses. The wizard creates its Windows rebuild helper when needed.
+
 ## Layout
 
 | Path | What lives there |

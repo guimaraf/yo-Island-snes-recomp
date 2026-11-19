@@ -117,7 +117,15 @@ target_link_libraries(SuperMarioWorld2YoshiSIslandSNESRecomp PRIVATE ${SNESRECOM
 target_compile_definitions(SuperMarioWorld2YoshiSIslandSNESRecomp PRIVATE
     SNES_GAME_VERSION="${SNESRECOMP_BUILD_VERSION}"
     SNES_GAME_TITLE="Super Mario World 2 - Yoshi's Island"
+    YI_CODEGEN_EXE_NAME="$<TARGET_FILE_BASE_NAME:SuperMarioWorld2YoshiSIslandSNESRecomp>"
 )
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/modules/snesrecomp/snesrecomp_cli.py")
+    target_compile_definitions(SuperMarioWorld2YoshiSIslandSNESRecomp PRIVATE
+        YI_CODEGEN_CLI="modules/snesrecomp/snesrecomp_cli.py")
+else()
+    target_compile_definitions(SuperMarioWorld2YoshiSIslandSNESRecomp PRIVATE
+        YI_CODEGEN_CLI="snesrecomp/snesrecomp_cli.py")
+endif()
 snesrecomp_target_sdl(SuperMarioWorld2YoshiSIslandSNESRecomp)
 
 # The desktop host: launcher flow, ROM resolution, config.ini + [KeyMap],
