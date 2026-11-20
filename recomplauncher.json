@@ -3,9 +3,28 @@
   "format": 1,
   "name": "Super Mario World 2 - Yoshi's Island Recomp",
   "repo": "guimaraf/yo-Island-snes-recomp",
+  "inputs": [
+    {
+      "id": "rom",
+      "label": "Super Mario World 2 - Yoshi's Island (USA) ROM",
+      "role": "game",
+      "formats": [{ "type": "file", "extensions": ["sfc"] }]
+    }
+  ],
   "start": {
     "program": ["Yoshi's Island recomp.exe"],
-    "args": ["--launcher"]
+    "args": ["--easy-play", "{input:rom}"]
+  },
+  "prepare": {
+    "program": ["Yoshi's Island recomp.exe"],
+    "args": ["--easy-prepare", "{input:rom}"],
+    "label": "Generate and compile Yoshi's Island",
+    "timeout": 3600,
+    "version": "0.1.2",
+    "done": [
+      "{install}/build/recomplauncher-ready-0.1.2",
+      "{install}/build/Yoshi's Island recomp.exe"
+    ]
   },
   "saves": ["{install}/build/saves"]
 }

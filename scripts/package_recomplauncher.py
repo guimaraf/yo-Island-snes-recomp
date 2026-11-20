@@ -35,6 +35,7 @@ DEVELOPMENT_DIRECTORIES = {
     ("dependences", "libjuice-1.7.2", "fuzzer"),
     ("modules", "snesrecomp", "docs"),
     ("modules", "recomp-ui", "docs"),
+    ("modules", "recomp-ui", "test_data"),
 }
 DEPENDENCIES = {
     "SDL3": ("CMakeLists.txt", "LICENSE.txt", "cmake", "include", "src", "wayland-protocols", "build-scripts"),
@@ -188,6 +189,14 @@ def package(source, output_dir, dependency_root, toolchain):
         title, _, instructions = readme.read_text(encoding="utf-8").partition("\n")
         if f" {base_version} " not in title:
             raise ValueError(f"Setup README title does not identify version {base_version}.")
+        if "prepare" in json.loads(PROFILE.read_text(encoding="utf-8")) and "First run:" in instructions:
+            instructions = instructions.replace(
+                "First run:",
+                "RecompLauncher Easy Setup: select your USA .sfc file and wait for the\n"
+                "local build. Keep the selected ROM available for Play. Build diagnostics\n"
+                "are written to build/recomplauncher-build.log.\n\nManual setup:",
+                1,
+            )
         readme.write_text(
             title.replace(f" {base_version} ", f" {RELEASE_VERSION} ", 1) + "\n"
             + instructions.replace(

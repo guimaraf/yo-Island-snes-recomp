@@ -3,6 +3,17 @@
 This document records project changes by version. The current version number is
 maintained separately in `VERSION`; this file is only a history log.
 
+## 0.1.2 — 2026-11-20
+
+- Enabled the castle 1-4 rendering fixes in the Windows x64 release. ER-07
+  addresses the extra lines above and below the boss. ER-12 addresses stray
+  pixels at the ends of the rotating bar near the lava. Both fixes were
+  available in test builds and shipped disabled by default in the 0.1.1
+  setup package.
+- Added native RecompLauncher Easy Setup. Select your USA `.sfc` ROM in
+  RecompLauncher to verify it and compile the game locally. Play launches
+  the prepared executable. The ZIP ships without a ROM.
+
 ## 0.1.1 — 2026-11-19
 
 - Adapted the Windows x64 setup package for RecompLauncher. Play opens the
