@@ -4,6 +4,9 @@ Initial record: October 14, 2026. Project: **Super Mario World 2: Yoshi’s Isla
 Purpose: maintain a list of observed issues, their evidence, and validation
 criteria so each occurrence can be investigated and resolved separately.
 
+For the implemented rendering path, reusable diagnostic lessons and capture
+interpretation, see [Yoshi's Island Rendering and Troubleshooting Guide](YOSHIS_ISLAND_RENDERING_GUIDE.md).
+
 This document is in the workspace root. The supplied images are preserved in
 `_errorRender/`, inside the port directory.
 The images are complete copies of the attachments provided by the user, without

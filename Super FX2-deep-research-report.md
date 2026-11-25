@@ -1,6 +1,14 @@
 # Resumo Executivo
 
-O **Super FX2** (também chamado GSU-2 ou GSU-2-SP1) é o coprocesador gráfico especial do Super Nintendo usado em *Super Mario World 2: Yoshi’s Island*. Trata-se de um processador RISC de 16 bits desenvolvido pela Argonaut/Nintendo, capaz de alcançar 21 MHz internos (dobrando o clock de 10,74 MHz do clock base). A instrução e arquitetura do Super FX2 são totalmente compatíveis com a versão original do Super FX (GSU-1): ele expõe 16 registradores gerais de 16 bits (R0–R15, com R15 atuando como contador de programa) e um registrador de status/flags de 16 bits. Inclui ainda registradores especiais mapeados na faixa $3000–$303F do SNES, como o ponteiro de ROM (R14), banco de programa (PBR), banco de ROM (ROMBR), banco de RAM (RAMBR) e registradores de modo de tela (SCMR) e cor (VCR). Um cache interno de 512 bytes acelera a execução de código.
+> Nota de revisão — 17 de outubro de 2026: VCR ($303B) é o registrador de
+> versão, não o registrador de cor. A cor de plotagem pertence ao COLR interno.
+> As descrições de VCR abaixo foram corrigidas. Este relatório histórico contém
+> afirmações conflitantes sobre limites de memória, que ainda exigem revisão;
+> não as use como limites comprovados do chip. Veja a pesquisa atual,
+> com fontes e comparação com o core local, em
+> [YOSHIS_ISLAND_SUPERFX_RESEARCH.md](YOSHIS_ISLAND_SUPERFX_RESEARCH.md).
+
+O **Super FX2** (também chamado GSU-2 ou GSU-2-SP1) é o coprocesador gráfico especial do Super Nintendo usado em *Super Mario World 2: Yoshi’s Island*. Trata-se de um processador RISC de 16 bits desenvolvido pela Argonaut/Nintendo, capaz de alcançar 21 MHz internos (dobrando o clock de 10,74 MHz do clock base). A instrução e arquitetura do Super FX2 são totalmente compatíveis com a versão original do Super FX (GSU-1): ele expõe 16 registradores gerais de 16 bits (R0–R15, com R15 atuando como contador de programa) e um registrador de status/flags de 16 bits. Inclui ainda registradores especiais mapeados na faixa $3000–$303F do SNES, como o ponteiro de ROM (R14), banco de programa (PBR), banco de ROM (ROMBR), banco de RAM (RAMBR) e registradores de modo de tela (SCMR) e versão (VCR). A cor de plotagem fica no registrador interno COLR. Um cache interno de 512 bytes acelera a execução de código.
 
 As principais diferenças do Super FX2 em relação ao Super FX original são de hardware externo: o GSU-2 vem em invólucro de 112 pinos (versus 100 pinos), permitindo mais linhas de endereço. Em consequência, ele pode selecionar mais memória externa. No jogo *Yoshi’s Island*, o chip GSU-2-SP1 suporta até 16 Mbit de ROM de jogo (2 MiB) e 256 Kbit de RAM de expansão. Tecnicamente, ele só pode acessar diretamente **2 MiB de ROM** no barramento do Super FX (GPROM); o restante da ROM (até 16 MiB total) está disponível apenas para a CPU SNES. Da mesma forma, embora o cartão possa conter até 256 KBit de RAM de expansão, apenas 128 KBit são visíveis ao GSU. Essa limitação deriva do mapeamento de hardware e do barramento compartilhado, que difere do mapeamento da CPU. Em *Yoshi’s Island* especificamente, o GSU-2-SP1 usa 2 MiB de ROM (o máximo mapeável) e apenas 256 Kbit de RAM (metade do habitual em GSU-2).
 
@@ -22,7 +30,8 @@ Emuladores implementam essas instruções diretamente do kit de desenvolvimento 
 - **ROMBR ($3036)**: Banco de ROM (contém bits altos de endereço ROM para GPROM).  
 - **RAMBR ($303C)**: Banco de RAM (0 ou 1, seleciona acesso a Game Pak RAM).  
 - **SCBR/SCMR**: Base e modo de tela, definem o buffer de imagem para operações de PLOT.  
-- **VCR ($303B)**: Registrador de cor atual para PLOT.  
+- **VCR ($303B)**: Registrador de versão, somente leitura.
+- **COLR (interno)**: Registrador de cor usado na plotagem; não é VCR nem um registrador de cor mapeado em $303B.
 
  *Imagem 1: Chip Super FX GSU-2-SP1 de *Yoshi’s Island* (foto do módulo de jogo). O GSU-2 é visivelmente maior que o GSU-1 e possui pinos extras (imagem licenciada CC BY-SA).*  
 
