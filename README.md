@@ -5,8 +5,8 @@
 A native recompilation of **Super Mario World 2 - Yoshi's Island** (USA), built on
 [snesrecomp](https://github.com/RetroPortingToolKit/snesrecomp).
 
-Local experiment to evaluate reuse of the existing Super FX LLE implementation in Yoshi's Island.
-
+The game boots and reaches gameplay on Windows x64, using the framework's
+Super FX (GSU-2) LLE core.
 
 
 > **You must legally own a copy of the game.** No ROM data is distributed with
@@ -15,10 +15,56 @@ Local experiment to evaluate reuse of the existing Super FX LLE implementation i
 
 ## Status
 
-Scaffolded on 2026-10-14 — **experimental port; runtime compatibility is unverified.** The layout, local build,
-ROM regeneration pipeline, and packaging are wired up; the game does not run
-until the host work in `src/game_rtl.c` is done. See
-[Porting from here](#porting-from-here).
+**Playable — the game boots and reaches gameplay** (since 0.1.0; current
+release 0.1.2, Windows x64).
+
+- **Tested so far:** a playthrough from the start to the end of **World 3**
+  with no serious problems (no crashes, softlocks or game-breaking bugs).
+  Worlds 4 to 6 have not been fully tested yet.
+- Battery saves (SRAM) are stored in `build/saves`.
+- Some scenes still show minor visual problems. These are being investigated
+  and fixed release by release. 0.1.2 fixed the boss and lava-bar issues in
+  castle 1-4. See [`versionHistory.md`](versionHistory.md).
+- Super FX support uses the framework's GSU-2 LLE core.
+- Windows x64 is the only supported release platform at the moment.
+
+### Found a problem? Please report it
+
+This is an ongoing project, and player reports are how the remaining issues
+get found and fixed. If you run into anything (a graphical glitch, wrong
+sound, a crash, a freeze, an input problem, or a stage you can't finish),
+please
+[open an issue](https://github.com/guimaraf/yo-Island-snes-recomp/issues)
+and include:
+
+- the version (shown in RecompLauncher, or in the `VERSION` file);
+- the world and stage, and what you were doing when it happened;
+- a screenshot or short video if possible;
+- for build or setup failures, `build/recomplauncher-build.log`.
+
+Every report is read, and fixes ship in the following releases.
+
+## Easy Setup requirements (RecompLauncher)
+
+Easy Setup **builds the game on your PC** from your own ROM. You do **not**
+need to install a compiler, Visual Studio, CMake, Python or Rust. The setup
+downloads everything automatically the first time. Before you start, make
+sure you have:
+
+| Requirement | Details |
+|---|---|
+| OS | Windows 10 (version 1803 or newer) or Windows 11, 64-bit (x64) |
+| ROM | Your own `Super Mario World 2 - Yoshi's Island (USA).sfc`, unheadered, matching the SHA-256 in [ROM identity](#rom-identity). Other revisions/regions are refused. |
+| Internet (first setup only) | Downloads the portable build toolchain **`cmake-clang-v1`** (~800 MB) from [retcomm-toolchains](https://github.com/TechnicallyComputers/retcomm-toolchains/releases). It includes CMake, Ninja, Clang (llvm-mingw), Python and SDL3. It is installed once per machine in `%LOCALAPPDATA%\retcomm\toolchains\` and is shared with other recompiled games, so it is not downloaded again. |
+| Built-in Windows tools | `curl` and `tar`. Both are included with Windows 10 1803+ and Windows 11, so you do not need to install anything. |
+| Disk space | About 3 GB free: ~800 MB for the toolchain plus ~2 GB during the build |
+| Time | Several minutes, depending on your CPU and connection. Later updates reuse the toolchain. |
+
+Easy Setup verifies the ROM, downloads the toolchain if it is missing,
+generates the C code and compiles the game into `build/`. If the build fails,
+the details are in `build/recomplauncher-build.log`. If you are offline, you
+can point the game's setup wizard at a `cmake-clang-v1-windows-x64.zip` you
+downloaded yourself, or set `RETCOMM_TOOLCHAIN_DIR` to an extracted copy.
 
 ## ROM identity
 
@@ -82,7 +128,7 @@ With Python 3.11 or newer and the RetComm Windows x64 `cmake-clang-v1`
 toolchain, run this from the repository root:
 
 ```powershell
-python scripts/package_recomplauncher.py dist/recomplauncher/islandSnesRecomp-0.1.1-windows-x64.zip
+python scripts/package_recomplauncher.py dist/recomplauncher/islandSnesRecomp-0.1.2-windows-x64.zip
 ```
 
 Set `RETCOMM_TOOLCHAIN_DIR` to the extracted toolchain or pass
@@ -98,8 +144,8 @@ compiled executable and the selected ROM. Keep the ROM available at the
 selected path. For compilation failures, see `build/recomplauncher-build.log`.
 
 To install manually, open the extracted executable, select the ROM and use
-**Generate & rebuild**. The setup pack's `README.txt` describes the build
-tool requirements. Game settings are available in the game's own interface.
+**Generate & rebuild**. The build tool requirements are listed in
+[Easy Setup requirements](#easy-setup-requirements-recomplauncher). Game settings are available in the game's own interface.
 
 To slim a setup ZIP that has already been built for RecompLauncher, run:
 
@@ -130,14 +176,14 @@ uses. The wizard creates its Windows rebuild helper when needed.
 | `scripts/` | `package_release.sh` — player-facing zip |
 | `framework_pins.txt` | Exact framework commits this project was scaffolded against |
 
-## Porting from here
+## Development notes
 
-The scaffold stops where the game-specific work starts. In rough order:
+The game boots and is playable; the remaining work is accuracy and polish.
+When changing the port:
 
-1. **Make it boot.** `src/game_rtl.c` holds the frame driver. The generic
-   LLE-first shape is there; a real title usually needs a frame boundary and
-   NMI delivery that understand its own main loop. This is the bulk of the
-   work.
+1. **Frame driver.** `src/game_rtl.c` holds the frame driver, frame boundary
+   and NMI delivery for this title. Rendering fixes are tracked per error ID
+   (ER-xx) in the project notes.
 2. **Name things.** Add entries to `recomp/symbols.toml` as you identify
    routines, then re-run `tools/regen.sh`. Set `emit = true` to promote one
    into ahead-of-time codegen; leave it false to keep it interpreted.
@@ -163,4 +209,4 @@ is not distributed here.
 
 ## Hardware and online experiment
 
-This ROM uses Super FX 2 (GSU-2). The project reuses the framework revision's Super FX LLE core and cartridge mapping, previously validated only with Star Fox; Yoshi's Island has not been qualified. The header indicates SlowROM, so the host does not force FastROM. Netplay with two standard SNES controllers is enabled for cooperative minigames in online sessions. The shared host keeps the session active outside minigames as well, where the game may ignore the second controller; no title-specific mode barrier has been added. The pinned revision builds rollback and selects it by default, but the frame driver's continuation state (`g_resume_pc`) is not part of the common snapshot. For the first online validation, force delay-sync on both peers with `SNES_NET_MODE=delay`. Rollback needs title-specific integration and validation before it can be considered reliable. The shared host forces effective VSync to 0 during online sessions and records the required breadcrumb, while preserving the offline preference.
+This ROM uses Super FX 2 (GSU-2). The project reuses the framework revision's Super FX LLE core and cartridge mapping, originally validated with Star Fox; Yoshi's Island now runs and reaches gameplay on it, with remaining visual issues tracked per release. The header indicates SlowROM, so the host does not force FastROM. Netplay with two standard SNES controllers is enabled for cooperative minigames in online sessions. The shared host keeps the session active outside minigames as well, where the game may ignore the second controller; no title-specific mode barrier has been added. The pinned revision builds rollback and selects it by default, but the frame driver's continuation state (`g_resume_pc`) is not part of the common snapshot. For the first online validation, force delay-sync on both peers with `SNES_NET_MODE=delay`. Rollback needs title-specific integration and validation before it can be considered reliable. The shared host forces effective VSync to 0 during online sessions and records the required breadcrumb, while preserving the offline preference.
