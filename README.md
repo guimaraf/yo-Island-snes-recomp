@@ -16,7 +16,7 @@ Super FX (GSU-2) LLE core.
 ## Status
 
 **Playable — the game boots and reaches gameplay** (since 0.1.0; current
-release 0.1.2, Windows x64).
+release 0.1.3, Windows x64).
 
 - **Tested so far:** a playthrough from the start to the end of **World 3**
   with no serious problems (no crashes, softlocks or game-breaking bugs).
@@ -128,7 +128,7 @@ With Python 3.11 or newer and the RetComm Windows x64 `cmake-clang-v1`
 toolchain, run this from the repository root:
 
 ```powershell
-python scripts/package_recomplauncher.py dist/recomplauncher/islandSnesRecomp-0.1.2-windows-x64.zip
+python scripts/package_recomplauncher.py dist/recomplauncher-rebuilt/islandSnesRecomp-0.1.2-windows-x64.zip
 ```
 
 Set `RETCOMM_TOOLCHAIN_DIR` to the extracted toolchain or pass
@@ -137,6 +137,10 @@ base. The script applies the local setup host changes and `VERSION`, builds a
 fresh host in a temporary directory without a ROM, and writes a new ZIP and
 SHA-256 file to `dist/recomplauncher/`. Use `--dependencies` to point to the shared directory
 containing SDL 3.4.10, Lua 5.4.9 and libjuice 1.7.2 sources.
+
+Packaging also requires Rust and Cargo with the pinned toolchain from the base
+package's `recompiler-rs/rust-toolchain.toml`. The script compiles the Windows
+x64 analyzer from those sources and includes it in the ZIP for players.
 
 In RecompLauncher, select your USA `.sfc` in **Easy Setup**. Setup verifies
 the ROM and generates and compiles the game into `build/`. **Play** uses the

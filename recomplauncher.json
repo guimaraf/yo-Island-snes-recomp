@@ -20,9 +20,9 @@
     "args": ["--easy-prepare", "{input:rom}"],
     "label": "Generate and compile Yoshi's Island",
     "timeout": 3600,
-    "version": "0.1.2",
+    "version": "0.1.3",
     "done": [
-      "{install}/build/recomplauncher-ready-0.1.2",
+      "{install}/build/recomplauncher-ready-0.1.3",
       "{install}/build/Yoshi's Island recomp.exe"
     ]
   },

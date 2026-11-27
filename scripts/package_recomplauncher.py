@@ -8,7 +8,9 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import shutil
+import struct
 import subprocess
+import sys
 import tempfile
 from zipfile import ZIP_DEFLATED, BadZipFile, ZipFile
 
@@ -21,6 +23,9 @@ RELEASE_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 RELEASE_NAME = f"islandSnesRecomp-{RELEASE_VERSION}-windows-x64.zip"
 LEGACY_NAME = f"supermarioworld2yoshisisland-{RELEASE_VERSION}-windows-x64.zip"
 PREVIOUS_SETUP = "supermarioworld2yoshisisland-0.1.0-windows-x64.zip"
+FRAMEWORK_PATHS = (PurePosixPath("modules/snesrecomp"), PurePosixPath("snesrecomp"))
+ANALYZER_TARGET = PurePosixPath("recompiler-rs/target")
+ANALYZER = ANALYZER_TARGET / "release/snesrecomp-analyze.exe"
 RELEASE_FILES = {
     "CMakeLists.txt", "LICENSE", "README.txt", "SOURCE_REVISIONS",
     "VERSION", "recomplauncher.json", "rom_identity.txt",
@@ -91,8 +96,9 @@ def inspect_base(archive, executable, *, repack=False):
     for filename in (executable, "VERSION", "CMakeLists.txt", "dependences/CMakeLists.txt", "recomp/bank00.cfg"):
         if PurePosixPath(prefix, filename) not in names:
             raise ValueError(f"Missing setup ZIP entry: {filename}")
-    if not any(PurePosixPath(prefix, folder, "snesrecomp_cli.py") in names
-               for folder in ("modules/snesrecomp", "snesrecomp")):
+    framework = next((folder for folder in FRAMEWORK_PATHS
+                      if PurePosixPath(prefix) / folder / "snesrecomp_cli.py" in names), None)
+    if framework is None:
         raise ValueError("Missing SNESRecomp CLI in the setup ZIP.")
     if len(entries) != len(names):
         raise ValueError("Duplicate entries in the setup ZIP.")
@@ -101,12 +107,16 @@ def inspect_base(archive, executable, *, repack=False):
         raise ValueError(f"Setup ZIP is {archive_version}. Build {RELEASE_VERSION} before repacking.")
     if repack and archive.read(f"{prefix}/{PROFILE.name}") != PROFILE.read_bytes():
         raise ValueError("The setup ZIP must already contain the current RecompLauncher profile.")
-    return prefix, archive_version
+    return prefix, archive_version, framework
 
 
 def release_file(path, executable):
+    path = PurePosixPath(path.as_posix())
     if len(path.parts) == 1:
         return path.name in RELEASE_FILES or path.name == executable or path.suffix.lower() == ".dll"
+    for framework in FRAMEWORK_PATHS:
+        if path.is_relative_to(framework / ANALYZER_TARGET):
+            return path == framework / ANALYZER
     return (
         path.parts[0] in RELEASE_DIRECTORIES
         and path.parts[:3] not in DEVELOPMENT_DIRECTORIES
@@ -120,8 +130,8 @@ def repack_setup(source, output_dir):
     output = release_output(source, output_dir)
     executable, = json.loads(PROFILE.read_text(encoding="utf-8"))["start"]["program"]
     with ZipFile(source) as original:
-        prefix, _ = inspect_base(original, executable, repack=True)
-        with release_zip(output) as archive:
+        prefix, _, framework = inspect_base(original, executable, repack=True)
+        with release_zip(output, framework) as archive:
             for entry in original.infolist():
                 relative = PurePosixPath(entry.filename).relative_to(prefix)
                 if entry.is_dir() or not release_file(relative, executable):
@@ -173,11 +183,11 @@ def package(source, output_dir, dependency_root, toolchain):
     with tempfile.TemporaryDirectory(prefix="yi-", dir=ROOT / "dist") as temporary:
         workspace = Path(temporary)
         with ZipFile(source) as archive:
-            prefix, base_version = inspect_base(archive, executable)
+            prefix, base_version, framework = inspect_base(archive, executable)
             project = workspace / "source"
             for entry in archive.infolist():
                 relative = PurePosixPath(entry.filename).relative_to(prefix)
-                if entry.is_dir() or not release_file(relative, executable):
+                if entry.is_dir() or relative == framework / ANALYZER or not release_file(relative, executable):
                     continue
                 destination = project.joinpath(*relative.parts)
                 destination.parent.mkdir(parents=True, exist_ok=True)
@@ -185,6 +195,12 @@ def package(source, output_dir, dependency_root, toolchain):
                     shutil.copyfileobj(reader, writer)
         for relative in PROJECT_UPDATES:
             shutil.copyfile(ROOT / relative, project / relative)
+        # Build against the same framework sources shipped in the setup ZIP.
+        analyzer_env = dict(os.environ, CARGO_TARGET_DIR=str(project / framework / ANALYZER_TARGET))
+        analyzer_env.pop("CARGO_BUILD_TARGET", None)
+        subprocess.run([sys.executable, str(project / framework / "tools/build_native_analyzer.py")],
+                       env=analyzer_env, check=True)
+        analyzer_path = project / framework / ANALYZER
         readme = project / "README.txt"
         title, _, instructions = readme.read_text(encoding="utf-8").partition("\n")
         if f" {base_version} " not in title:
@@ -212,6 +228,8 @@ def package(source, output_dir, dependency_root, toolchain):
             for relative in PROJECT_UPDATES:
                 digest = hashlib.sha256((project / relative).read_bytes()).hexdigest()
                 revisions.write(f"local_sha256 {relative}={digest}\n")
+            digest = hashlib.sha256(analyzer_path.read_bytes()).hexdigest()
+            revisions.write(f"local_sha256 {framework / ANALYZER}={digest}\n")
         for path, relative in files:
             destination = project / "dependences" / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -219,7 +237,7 @@ def package(source, output_dir, dependency_root, toolchain):
         build_dir = workspace / "build"
         build_host(project, build_dir, toolchain)
         shutil.copyfile(build_dir / executable, project / executable)
-        with release_zip(output) as archive:
+        with release_zip(output, framework) as archive:
             for path in sorted(project.rglob("*")):
                 relative = path.relative_to(project)
                 if path.is_file() and release_file(relative, executable):
@@ -227,13 +245,28 @@ def package(source, output_dir, dependency_root, toolchain):
     return output
 
 
+def verify_analyzer(archive, member):
+    if member not in archive.namelist():
+        raise ValueError(f"Missing native analyzer in the setup ZIP: {member}")
+    with archive.open(member) as binary:
+        header = binary.read(64)
+        if len(header) == 64 and header.startswith(b"MZ"):
+            pe_offset, = struct.unpack_from("<I", header, 60)
+            if 64 <= pe_offset <= archive.getinfo(member).file_size - 6:
+                binary.seek(pe_offset)
+                if binary.read(6) == b"PE\0\0\x64\x86":
+                    return
+    raise ValueError(f"Expected a Windows x64 native analyzer: {member}")
+
+
 @contextmanager
-def release_zip(output):
+def release_zip(output, framework):
     with tempfile.TemporaryDirectory(dir=output.parent) as temporary:
         staged = Path(temporary) / output.name
         with ZipFile(staged, "w", compression=ZIP_DEFLATED) as archive:
             yield archive
         with ZipFile(staged) as archive:
+            verify_analyzer(archive, f"{output.stem}/{framework / ANALYZER}")
             broken = archive.testzip()
             if broken is not None:
                 raise ValueError(f"Corrupt ZIP entry: {broken}")

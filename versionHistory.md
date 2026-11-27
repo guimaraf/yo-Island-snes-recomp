@@ -3,6 +3,12 @@
 This document records project changes by version. The current version number is
 maintained separately in `VERSION`; this file is only a history log.
 
+## 0.1.3 — 2026-11-27
+
+- Included the prebuilt Windows x64 SNESRecomp analyzer in the setup ZIP so
+  Easy Setup and the standalone launcher can generate the game without Rust
+  or Cargo on the player's PC.
+
 ## 0.1.2 — 2026-11-20
 
 - Enabled the castle 1-4 rendering fixes in the Windows x64 release. ER-07
